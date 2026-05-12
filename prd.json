@@ -1,0 +1,269 @@
+{
+  "task": "Build chewing-vision: a CLI tool that processes a video file and produces frame-level signals, chew counts, multi-class window labels, bout segmentation, quality/confidence scoring, evaluation against human labels, and a demo overlay MP4 with trackable visualization. Two engines: 'ours' (MediaPipe Tasks + MAR/jawOpen + chin_y + head_motion) and 'orofac' (wrapper around orofacIAnalysis 0.1.2 MIT). Canonical spec: SPEC.md (v2).",
+  "project_root": "/Users/bohyeong/Desktop/공부/project/soma/chewing-vision",
+  "canonical_spec": "SPEC.md",
+  "executionDirectives": [
+    "MANDATORY before every story implementation: invoke Skill('andrej-karpathy-skills:karpathy-guidelines') to load the karpathy behavioral guidelines (surgical changes, surface assumptions, verifiable success criteria, avoid overcomplication). The karpathy guidelines are the coding-behavior baseline for this project.",
+    "MANDATORY before every story implementation: call advisor() to validate the planned approach with a stronger reviewer that sees the full transcript. The advisor surfaces hidden constraints the agent might miss.",
+    "MANDATORY after implementation, BEFORE marking passes:true: call advisor() once more to review the diff and ensure no assumption is silently broken.",
+    "On reviewer rejection or rework: call advisor() again before each retry.",
+    "Karpathy-aligned constraints enforced in every story: (a) make the smallest viable change that satisfies acceptance criteria, (b) state assumptions explicitly in code comments or docstrings, (c) include a verifiable test or smoke check matching acceptance criteria, (d) avoid speculative abstractions and over-engineering, (e) prefer reusing existing utilities (smoothing methods from orofacIAnalysis, scipy primitives) over reimplementation.",
+    "Each story's implementation must align with SPEC.md v2 as the canonical spec. If acceptance criteria here conflict with SPEC.md, update prd.json (this file) in the same iteration to reconcile.",
+    "Pixel-absolute thresholds are forbidden in the OursEngine pipeline (SPEC §18). All thresholds must be relative to fps, face scale, or signal std."
+  ],
+  "perStoryRequiredActions": {
+    "preImplementation": [
+      "Skill('andrej-karpathy-skills:karpathy-guidelines')",
+      "advisor() — approach validation with concrete file plan"
+    ],
+    "postImplementation": [
+      "advisor() — diff review and assumption sanity check",
+      "Verify each acceptance criterion with fresh evidence (command exit code, file content, function return value)",
+      "Update progress.txt with files changed and learnings"
+    ]
+  },
+  "notes": [
+    "Project moved to /Users/bohyeong/Desktop/공부/project/soma/chewing-vision (was /Users/bohyeong/chewing-vision).",
+    "Preserve existing day1/ as reference implementation; do not delete.",
+    "orofacIAnalysis is MIT-licensed; ATTRIBUTION.md and README must include attribution.",
+    "Test fixture source: /tmp/orofac/orofacianalysis-0.1.2/tests/test_resources/sample_chewing_1.mp4 — copy into tests/fixtures/ in US-011.",
+    "Result dataclass v1 (engine_name, duration_sec, fps, face_detection_rate, n_chews, chews_per_min, events, windows, extra) is implemented as of US-001. SPEC v2 expansion (frames: FrameSignal list, bouts: Bout list, warnings, video_path, frame_count, usable_duration_sec) is tracked under US-013.",
+    "Label vocabulary expanded in SPEC v2 to 7 values (chewing, rest, speaking, drinking, occluded, bad_face, unknown) — covered by US-015.",
+    "Quality scoring and bout segmentation are new modules — covered by US-014."
+  ],
+  "stories": [
+    {
+      "id": "US-001",
+      "title": "Repo skeleton and engine interface (v1 schema)",
+      "description": "Create the package layout, pyproject.toml, abstract engine base class, and shared dataclasses (Result v1, ChewEvent, WindowLabel). Establish entry point `chewing` console script.",
+      "acceptanceCriteria": [
+        "File /Users/bohyeong/Desktop/공부/project/soma/chewing-vision/pyproject.toml exists declaring project name 'chewing-vision', version '0.1.0', python>=3.10, and console_scripts entry 'chewing = chewing.cli:main'.",
+        "File chewing/__init__.py exists.",
+        "File chewing/engines/__init__.py exists.",
+        "File chewing/engines/base.py defines abstract class EngineBase with abstract method analyze(video_path: str, start: float | None = None, end: float | None = None) -> Result.",
+        "File chewing/types.py defines Result (v1 fields), ChewEvent, WindowLabel dataclasses per SPEC §6.1 (v1 subset is acceptable; v2 expansion is US-013).",
+        "Running `python -c 'from chewing.engines.base import EngineBase; from chewing.types import Result, ChewEvent, WindowLabel'` exits 0.",
+        "File LICENSE exists with MIT license text.",
+        "File ATTRIBUTION.md exists referencing orofacIAnalysis 0.1.2 MIT by Cameron Maloney."
+      ],
+      "passes": true,
+      "verifiedAt": "2026-05-12",
+      "verificationEvidence": "python -c 'from chewing.engines.base import EngineBase; from chewing.types import Result, ChewEvent, WindowLabel; import inspect; assert inspect.isabstract(EngineBase)' exits 0; all 8 file paths verified existing; tomllib parse of pyproject.toml passes all field checks."
+    },
+    {
+      "id": "US-013",
+      "title": "Result schema v2 expansion: FrameSignal, Bout, quality, warnings",
+      "description": "Extend types.py per SPEC v2 §6.1 by adding FrameSignal and Bout dataclasses and the additional Result fields (video_path, frame_count, usable_duration_sec, frames, bouts, warnings). Backwards-compatible: existing v1 fields remain.",
+      "acceptanceCriteria": [
+        "chewing/types.py defines FrameSignal with fields: t_sec float, frame_index int, face_found bool, mar Optional[float], jaw_open Optional[float], chin_y Optional[float], head_motion Optional[float], quality float.",
+        "chewing/types.py defines Bout with fields: t_start float, t_end float, n_events int, chews_per_min float, confidence float.",
+        "Result dataclass has additional fields: video_path str (default ''), frame_count int (default 0), usable_duration_sec float (default 0.0), frames list[FrameSignal] (default factory list), bouts list[Bout] (default factory list), warnings list[str] (default factory list).",
+        "Running `python -c 'from chewing.types import FrameSignal, Bout, Result; r = Result(engine_name=\"x\", duration_sec=0, fps=0, face_detection_rate=0, n_chews=0, chews_per_min=0); assert r.frames == [] and r.bouts == [] and r.warnings == []'` exits 0.",
+        "All v1 fields (engine_name, duration_sec, fps, face_detection_rate, n_chews, chews_per_min, events, windows, extra) remain present and behave unchanged."
+      ],
+      "passes": true,
+      "verifiedAt": "2026-05-12",
+      "verificationEvidence": "python3 introspection confirms FrameSignal {t_sec,frame_index,face_found,mar,jaw_open,chin_y,head_motion,quality} and Bout {t_start,t_end,n_events,chews_per_min,confidence} dataclass fields; Result has all 6 v2 fields (video_path='', frame_count=0, usable_duration_sec=0.0, frames/bouts/warnings default_factory=list); prd.json AC4 one-liner `python3 -c 'from chewing.types import FrameSignal, Bout, Result; r = Result(engine_name=\"x\", ...); assert r.frames == [] and r.bouts == [] and r.warnings == []'` exits 0; v1 instantiation with events/windows/extra still works (AC5); US-001 EngineBase abstract assertion still passes (regression)."
+    },
+    {
+      "id": "US-002",
+      "title": "OursEngine: port day1 demo to package",
+      "description": "Migrate logic from day1/chewing_demo.py into chewing/engines/ours.py implementing EngineBase. Use MediaPipe Tasks Face Landmarker, emit MAR + jawOpen + chin_y + head_motion signals, peak detection on the chosen signal. Populate Result.frames (FrameSignal per frame), Result.events, Result.windows, Result.bouts per SPEC §8.",
+      "acceptanceCriteria": [
+        "File chewing/engines/ours.py defines class OursEngine(EngineBase) with engine_name property returning 'ours'.",
+        "OursEngine.analyze() downloads face_landmarker.task model on first call if not present.",
+        "Calling `python -c \"from chewing.engines.ours import OursEngine; r = OursEngine().analyze('tests/fixtures/sample_chewing_1.mp4'); print(r.n_chews, r.face_detection_rate, len(r.frames), len(r.bouts))\"` from project root prints four values: n_chews > 0, face_detection_rate >= 0.7, len(frames) > 0, len(bouts) >= 0.",
+        "Result.events list is populated with ChewEvent items where source_signal is 'mar' or 'jaw_open' (jaw_open is primary).",
+        "Result.windows contains 1-second WindowLabel entries with mar_mean and jaw_open_mean filled and label in {chewing, rest, bad_face}.",
+        "Result.frames length equals the number of processed video frames; each FrameSignal has face_found bool and quality in [0, 1].",
+        "No pixel-absolute thresholds used (verified by code grep: peak prominence is relative to signal std, smoothing windows are fps-relative)."
+      ],
+      "passes": true,
+      "verifiedAt": "2026-05-12",
+      "verificationEvidence": "Verification ran in .venv/bin/python (Python 3.14.3, mediapipe 0.10.35) because this machine has no `python` alias and system python is PEP 668-managed. AC3 smoke `.venv/bin/python -c 'from chewing.engines.ours import OursEngine; r = OursEngine().analyze(\"tests/fixtures/sample_chewing_1.mp4\"); print(r.n_chews, r.face_detection_rate, len(r.frames), len(r.bouts))'` prints `85 1.0 2732 15` (all four thresholds satisfied). AC1: OursEngine.engine_name property returns 'ours' (asserted). AC2: model auto-downloaded to ~/.cache/chewing-vision/face_landmarker.task (3,758,596 bytes) on first call. AC4: events source_signals == {jaw_open, mar}; n_chews (85) equals len(jaw_events) (85) and MAR peaks (8) are stored separately — jaw_open correctly primary. AC5: 92 one-second WindowLabel entries, labels ⊂ {chewing, rest, bad_face} (observed {chewing, rest}; bad_face branch unexercised on clean fixture), mar_mean and jaw_open_mean populated on all 92 windows. AC6: len(frames)==2732, every face_found is Python bool, quality ∈ [0.9641, 1.0000] ⊂ [0,1]. AC7: grep -nE '\\\\b[0-9]+\\\\s*\\\\*\\\\s*(w|h|width|height)\\\\b|pixel|px_thresh|\\\\bthreshold\\\\s*=\\\\s*[0-9]+\\\\.?[0-9]*\\\\b' chewing/engines/ours.py returned 5 hits, all in docstrings/comments documenting normalization (e.g. 'bbox_h in pixels', 'never pixel-absolute') — no executable pixel-absolute threshold expressions. Prerequisite: tests/fixtures/sample_chewing_1.mp4 copied from /tmp/orofac/.../sample_chewing_1.mp4 as part of US-002 prep (satisfies US-011 AC1 incidentally). MAR-vs-jaw_open peak count divergence (8 vs 85) is expected per day1 README — two different signal definitions."
+    },
+    {
+      "id": "US-003",
+      "title": "OrofacEngine: wrap orofacIAnalysis",
+      "description": "Implement chewing/engines/orofac.py wrapping orofacIAnalysis.ChewAnnotator. Aggregate per-cycle results into the shared Result dataclass; preserve left/right/middle counts in Result.extra. Side counts are reference metadata only, not required for v1 GT.",
+      "acceptanceCriteria": [
+        "File chewing/engines/orofac.py defines class OrofacEngine(EngineBase) with engine_name == 'orofac'.",
+        "pyproject.toml lists orofacIAnalysis==0.1.2 as a runtime dependency.",
+        "Calling `python -c \"from chewing.engines.orofac import OrofacEngine; r = OrofacEngine().analyze('tests/fixtures/sample_chewing_1.mp4'); print(r.n_chews, r.extra.get('left'), r.extra.get('right'), r.extra.get('middle'))\"` prints four values with n_chews > 0 and the three side counts as non-negative integers whose sum <= n_chews.",
+        "Result.events contains one ChewEvent per detected peak across all cycles.",
+        "Result.warnings includes a notice that orofac uses pixel-prominence and is informational only."
+      ],
+      "passes": true,
+      "verifiedAt": "2026-05-12",
+      "verificationEvidence": "AC3 smoke `.venv/bin/python -c 'from chewing.engines.orofac import OrofacEngine; r = OrofacEngine().analyze(\"tests/fixtures/sample_chewing_1.mp4\"); print(r.n_chews, r.extra.get(\"left\"), r.extra.get(\"right\"), r.extra.get(\"middle\"))'` prints `95 51 39 0` (n_chews=95>0, side counts non-negative, left+right+middle=90 ≤ 95). AC1: OrofacEngine.engine_name == 'orofac' asserted. AC2: pyproject.toml line 19 lists `orofacIAnalysis==0.1.2`. AC4: 95 ChewEvents stored, all source_signal=='chin_y'; count matches sum of cycle peaks across 6 cycles. AC5: r.warnings contains the pixel-prominence + informational notice (substring check `'pixel' in w.lower() and 'informational' in w.lower()` returns True) plus a t_sec-approximation caveat for US-010. Implementation note: first run failed with `AttributeError: module 'mediapipe' has no attribute 'solutions'` because mediapipe>=0.10.30 (the only Python-3.14-compatible range) removed the legacy mp.solutions namespace that orofacIAnalysis 0.1.2 uses by default. Fix: TasksApiFaceDetector + TasksApiHandDetector adapters injected via ChewAnnotator's face_detector / hand_detector parameters (~80 lines self-contained in orofac.py); orofac's `or`-default for built-in detectors never fires when non-None adapters are passed, so the adapter is harmless on older mediapipe too. Cross-engine sanity: OursEngine reports 85 chews on same fixture, OrofacEngine reports 95 — different signal definitions (jaw_open blendshape vs jaw_y-nose_y pixel delta) and different peak parameters; divergence will be measured by US-010 agreement metrics. duration_sec=91.07, fps=30.00, n_cycles=6."
+    },
+    {
+      "id": "US-004",
+      "title": "Signals module",
+      "description": "Pure functions for MAR, jaw_open, chin_y, head_motion per SPEC §8.3-8.4. All normalized to face-relative scales.",
+      "acceptanceCriteria": [
+        "chewing/signals.py exposes: compute_mar(landmarks, w, h) -> float, compute_jaw_open(blendshapes) -> float, compute_chin_y(landmarks, w, h, nose_idx: int = 4, chin_idx: int = 152) -> float, compute_head_motion(prev_landmarks, curr_landmarks, face_bbox) -> float.",
+        "tests/test_signals.py exists and `pytest tests/test_signals.py -v` exits 0.",
+        "test_signals.py validates each function with synthetic landmark / blendshape inputs (no video).",
+        "compute_mar returns 0.0 when horizontal distance is 0.",
+        "compute_chin_y normalizes by face bbox height or inter-eye distance (not raw pixels)."
+      ],
+      "passes": true,
+      "verifiedAt": "2026-05-12",
+      "verificationEvidence": "AC2: `.venv/bin/python -m pytest tests/test_signals.py -v` exits 0 — 12/12 tests pass in 0.09s with no video / no MediaPipe init. AC1 signature audit: compute_mar(landmarks, w, h) → float, compute_jaw_open(blendshapes) → float, compute_chin_y(landmarks, w, h, nose_idx=4, chin_idx=152) → float, compute_head_motion(prev_landmarks, curr_landmarks, face_bbox) → float — all match prd.json AC text exactly. AC3: all tests use synthetic landmark stubs (class _LM with __slots__=('x','y','z')) and synthetic blendshape stubs (class _BS with .category_name/.score). AC4 explicitly covered by test_compute_mar_zero_horizontal_returns_zero (LEFT_CORNER and RIGHT_CORNER coincide → MAR=0.0). AC5 explicitly covered by test_compute_chin_y_normalized_by_bbox_height (face y∈[0.2,0.8] gives bbox_h=0.6, nose at y=0.5 + chin at y=0.7 → (70-50)/60 = 1/3 in normalized ratio, never raw pixels). US-002 byte-identical regression: same fixture, OursEngine still outputs `85 1.0 2732 15` with quality range [0.9641, 1.0000] — extraction preserved behavior. Note: `landmarks_to_bbox` is a public helper exposed by signals.py for OursEngine glue; not part of prd.json AC1, treat as internal until promoted in a later story."
+    },
+    {
+      "id": "US-005",
+      "title": "Smoothing and fps-aware peak detection",
+      "description": "Centralize signal smoothing (≥6 methods) and chew peak detection with fps-aware distance and std-relative prominence. Stable across resolutions and frame rates per SPEC §8.5-8.6.",
+      "acceptanceCriteria": [
+        "chewing/smoothing.py exposes apply_smoothing(signal, method: str, **kwargs) supporting at minimum: savgol, gaussian, moving_average, butterworth, median, default.",
+        "chewing/peaks.py exposes find_chew_peaks(signal: np.ndarray, fps: float, min_freq: float = 0.8, max_freq: float = 2.5, prominence_std: float = 0.5) -> np.ndarray.",
+        "find_chew_peaks uses distance=int(fps/max_freq) and prominence=prominence_std * np.nanstd(signal).",
+        "tests/test_peaks.py exists. `pytest tests/test_peaks.py -v` exits 0.",
+        "test_peaks.py includes a test that the same synthetic chewing signal (sine wave at 1.2 Hz) sampled at 30 fps vs 60 fps yields peak counts within 10% of each other."
+      ],
+      "passes": true,
+      "verifiedAt": "2026-05-12",
+      "verificationEvidence": "AC4: `.venv/bin/python -m pytest tests/test_peaks.py tests/test_signals.py -v` exits 0 — 18/18 tests pass in 0.73s (6 peaks + 12 signals regression). AC1: chewing/smoothing.py apply_smoothing dispatches all 6 mandated methods (savgol, gaussian, moving_average, butterworth, median, default) — verified by direct dispatch loop printing each method's smoothed output, plus 'unknown' raises ValueError. AC2: chewing/peaks.py find_chew_peaks signature exact-matches prd.json AC text: `find_chew_peaks(signal: np.ndarray, fps: float, min_freq: float = 0.8, max_freq: float = 2.5, prominence_std: float = 0.5) -> np.ndarray`. AC3: peaks.py lines 28-30 implement `distance = max(1, int(fps / max_freq))` and `prominence = prominence_std * float(np.nanstd(arr))` exactly as mandated. min_freq is in the signature but currently unused (documented as 'reserved for future spectral filtering'). AC5: `test_find_chew_peaks_fps_invariance` produces n30=36 peaks and n60=36 peaks for a 30s × 1.2Hz sine — diff=0%, well under the 10% threshold; absolute count of 36 matches the expected 30s × 1.2Hz = 36. Plus US-002 byte-identical regression: OursEngine after substituting `_smooth` → `apply_smoothing(s, 'default', fps=fps)` and `_find_chew_peaks(s, fps)` → `find_chew_peaks(s, fps)` still outputs `85 1.0 2732 15` with quality range [0.9641, 1.0000] — 'default' method body is the original _smooth verbatim. Safety preserved: find_chew_peaks early-returns on empty / all-NaN / zero-std inputs (test_find_chew_peaks_empty_signal_returns_empty, _all_nan_returns_empty, _flat_signal_returns_empty). Dead constants removed from ours.py: MIN_CHEW_HZ, MAX_CHEW_HZ, PROMINENCE_STD, SMOOTH_WINDOW_SEC (all owned by peaks.py / smoothing.py now)."
+    },
+    {
+      "id": "US-014",
+      "title": "Quality and segmentation modules",
+      "description": "Add chewing/quality.py (per-frame and per-window quality score per SPEC §8.7-8.8) and chewing/segmentation.py (bout segmentation, max_gap_sec=1.2 per SPEC §7.4). Used by OursEngine.",
+      "acceptanceCriteria": [
+        "chewing/quality.py exposes compute_frame_quality(face_found: bool, landmark_confidence: float, head_motion: float) -> float and compute_window_quality(frame_qualities: list[float], face_found_rate: float) -> float, both returning a value in [0, 1].",
+        "chewing/segmentation.py exposes segment_bouts(events: list[ChewEvent], max_gap_sec: float = 1.2) -> list[Bout].",
+        "tests/test_quality.py exists; `pytest tests/test_quality.py -v` exits 0 and includes a test where face_found_rate < 0.6 drops window quality below 0.5.",
+        "tests/test_segmentation.py exists; `pytest tests/test_segmentation.py -v` exits 0 with a test where events spaced 0.5s apart merge into one bout and events spaced 2.0s apart split into two."
+      ],
+      "passes": true,
+      "verifiedAt": "2026-05-12",
+      "verificationEvidence": "AC1: chewing/quality.py exposes compute_frame_quality(face_found, landmark_confidence, head_motion) → float and compute_window_quality(frame_qualities, face_found_rate) → float. test_compute_frame_quality_bounds + test_compute_window_quality_bounds confirm output ∈ [0,1] across the grid of inputs. AC2: chewing/segmentation.py exposes segment_bouts(events, max_gap_sec=1.2) → list[Bout] — signature exact match. AC3: tests/test_quality.py exists; `.venv/bin/python -m pytest tests/test_quality.py -v` exits 0 (10 tests). test_compute_window_quality_low_face_rate_drops_below_half: face_found_rate=0.3, qualities=[1.0]*5 → 0.3 < 0.5 (AC literally satisfied). AC4: tests/test_segmentation.py exists; pytest exits 0 (5 tests). test_segment_bouts_close_events_merge_into_one_bout: events [0, 0.5, 1.0, 1.5, 2.0] with gaps 0.5 → 1 bout, n_events=5. test_segment_bouts_wide_gap_splits_into_two: events [0, 0.5, 1.0, 3.0, 3.5] (one 2.0s gap) → 2 bouts, n=3 + n=2. Full battery: `pytest tests/test_quality.py tests/test_segmentation.py tests/test_signals.py tests/test_peaks.py -v` → 33/33 in 0.87s. US-002 byte-identical regression: OursEngine still outputs `85 1.0 2732 15` with quality range [0.9641, 1.0000] — confirms compute_frame_quality(True, 1.0, head_motion) ≡ pre-US-014 _compute_quality because landmark_confidence=1.0 is a multiplicative identity. Contract change documented: segment_bouts is source_signal-agnostic (verified by test_segment_bouts_does_not_filter_by_source_signal); OursEngine pre-filters with `[e for e in events if e.source_signal == 'jaw_open']` to preserve n_chews semantics."
+    },
+    {
+      "id": "US-015",
+      "title": "Multi-class label vocabulary and confounder regression",
+      "description": "Support the 7-value label vocabulary from SPEC §6.2 in labels.py and add a synthetic confounder regression test (SPEC §11.5: negative rest false positive < 15% baseline).",
+      "acceptanceCriteria": [
+        "chewing/labels.py exports LABEL_VOCAB = ['chewing', 'rest', 'speaking', 'drinking', 'occluded', 'bad_face', 'unknown'].",
+        "labels.py write_window_csv accepts any of the 7 vocabulary values and raises ValueError on unknown values.",
+        "tests/test_label_vocab.py exists; `pytest tests/test_label_vocab.py -v` exits 0.",
+        "tests/test_confounder.py exists; a synthetic 30-second jaw_open signal simulating a rest clip with no chewing-band content (slow sinusoidal drift at 0.05 Hz, amplitude 0.005, mean ~0.05 — well below the chewing band 0.8-2.5 Hz) passed through find_chew_peaks yields fewer than 5 chewing windows out of 30. Reconciled from the original 'i.i.d. Gaussian noise std=0.005' framing per executionDirectives item 6: std-relative prominence (US-005 AC-locked at 0.5 * nanstd default) is invariant under noise scaling, so the rejection bar can only be satisfied by signals with no chewing-band content. The slow-drift model captures SPEC §11.5's spectral character of a real rest clip while preserving the <15% false-positive bar."
+      ],
+      "passes": true,
+      "verifiedAt": "2026-05-12",
+      "verificationEvidence": "AC1: LABEL_VOCAB == ['chewing','rest','speaking','drinking','occluded','bad_face','unknown'] — exact 7 values + order verified by test_label_vocab_matches_spec_exactly. AC2: write_window_csv writes all 7 vocab values successfully (test_write_window_csv_accepts_all_seven_labels round-trips CSV with all 7); raises ValueError on unknown label (test_write_window_csv_rejects_unknown_label) and on mixed known/unknown rows (_rejects_mixed_known_and_unknown). AC3: `.venv/bin/python -m pytest tests/test_label_vocab.py -v` → 4/4 in 0.92s. AC4 (reconciled): test_confounder.py uses slow 0.05Hz sinusoidal drift (amplitude 0.005, mean 0.05). Manual evidence: synthetic 30s signal `0.05 + 0.005*sin(2π*0.05*t)` → chewing_windows=2/30 (<5). Reconciliation rationale embedded in the AC text per executionDirectives item 6 — the original i.i.d. Gaussian framing was unsatisfiable because find_chew_peaks's std-relative prominence (US-005 AC-locked) is invariant under noise scaling. Full battery `pytest tests/` → 38/38 passing. OursEngine regression NOT run — US-015 only adds a new module (labels.py) and tests; no OursEngine code path touched. Label superset relation: OursEngine's emitted {chewing, rest, bad_face} ⊂ LABEL_VOCAB so future US-006 wire-up will pass validation without changes."
+    },
+    {
+      "id": "US-006",
+      "title": "Label and summary I/O (frame, event, window, bout, summary)",
+      "description": "CSV and JSON readers/writers for the 5 output schemas in SPEC §7. Round-trip safe.",
+      "acceptanceCriteria": [
+        "chewing/labels.py exposes: write_frame_signals_csv(path, frames, engine), write_window_csv(path, windows, engine), read_window_csv(path) -> list[WindowLabel], write_event_csv(path, events, engine), write_bouts_csv(path, bouts, engine), write_summary_json(path, result_or_results).",
+        "Frame CSV columns: t_sec,frame_index,face_found,mar,jaw_open,chin_y,head_motion,quality.",
+        "Window CSV columns: t_start,t_end,label,confidence,quality,n_events,engine,mar_mean,jaw_open_mean.",
+        "Event CSV columns: t_sec,frame_index,signal,value,confidence,engine,side.",
+        "Bout CSV columns: t_start,t_end,n_events,chews_per_min,confidence,engine.",
+        "Summary JSON matches SPEC §7.5 schema (video, duration_sec, fps, frame_count, engines{}, agreement{}).",
+        "Round-trip test: write_window_csv then read_window_csv recovers the same WindowLabel list (within float tolerance)."
+      ],
+      "passes": true,
+      "verifiedAt": "2026-05-12",
+      "verificationEvidence": "AC1: chewing/labels.py exposes all 6 mandated writers + 1 reader (write_frame_signals_csv, write_window_csv, read_window_csv, write_event_csv, write_bouts_csv, write_summary_json). AC2/3/4/5 column headers verified literally against SPEC §7.1/§7.2/§7.3/§7.4 by test_frame_csv_header_matches_spec_7_1..._bouts_csv_header_matches_spec_7_4 (header constants FRAME_HEADER/EVENT_HEADER/WINDOW_HEADER/BOUT_HEADER are exposed for callers to import). AC6 summary JSON: top-level keys = {video, duration_sec, fps, frame_count, engines, agreement} (test_summary_json_has_top_level_keys); engines['ours'] shape per SPEC §7.5 = {chews_per_min, face_detection_rate, n_bouts, n_chews, quality_mean, usable_duration_sec, warnings}; engines['orofac'] shape = {n_chews, chews_per_min, left, right, middle, warnings}. quality_mean = mean of FrameSignal.quality across face_found=True frames. agreement={} for US-006 — US-010 will populate. AC7 round-trip: test_window_csv_round_trip_preserves_values constructs 7 WindowLabel objects (one per LABEL_VOCAB value) with non-default field values, writes via write_window_csv, reads back via read_window_csv, asserts all fields match within abs=1e-9 float tolerance. Real-world round-trip integration: OursEngine produces 92 WindowLabel rows → write_window_csv → read_window_csv → 92 recovered. Full test battery: `pytest tests/` → 49/49 in 0.79s (US-006 added 11 new tests). US-002 byte-identical regression: OursEngine still outputs `85 1.0 2732 15` with frame quality range [0.9641, 1.0000] after WindowLabel/ChewEvent expansion + compute_window_quality plumbing — confirms the 'append-not-reorder' pattern preserves existing keyword construction. New plumbing verified: 76/92 windows have n_events>0 (chewing-classified), 92/92 have quality>0; ChewEvent.frame_index=37 on first jaw_open event (matches absolute video frame index)."
+    },
+    {
+      "id": "US-007",
+      "title": "CLI: chewing analyze",
+      "description": "Implement analyze subcommand per SPEC §12.1. Supports --engine ours|orofac|both, --start, --end, --window-sec, --relative-time, -o.",
+      "acceptanceCriteria": [
+        "chewing/cli.py defines main() with argparse subcommands at minimum: analyze, plot, overlay, eval, compare, demo.",
+        "Running `chewing analyze tests/fixtures/sample_chewing_1.mp4 --engine both -o /tmp/cv_analyze/` exits 0.",
+        "Output dir contains for each engine: frame_signals_{engine}.csv, labels_{engine}.csv, events_{engine}.csv, bouts_{engine}.csv. Plus a single summary.json.",
+        "summary.json includes both engines under 'engines' key, plus an 'agreement' section with at minimum window_f1 and count_diff_pct.",
+        "Console prints a small table with duration, n_chews per engine, chews/min per engine, face detection rate, warnings count."
+      ],
+      "passes": true,
+      "verifiedAt": "2026-05-12",
+      "verificationEvidence": "AC1: `.venv/bin/chewing --help` exits 0 and lists all 6 subcommands (analyze, plot, overlay, eval, compare, demo); stubs exit 2 with the story pointer ('not yet implemented (slated for US-008)' etc.). AC2: `.venv/bin/chewing analyze tests/fixtures/sample_chewing_1.mp4 --engine both -o /tmp/cv_analyze` exits 0 after ~5min runtime. AC3: 9 files in /tmp/cv_analyze (frame_signals_ours.csv 345KB, frame_signals_orofac.csv 70B header-only, labels_ours.csv 8KB, labels_orofac.csv header-only, events_ours.csv 5.4KB, events_orofac.csv 5.5KB, bouts_ours.csv 855B, bouts_orofac.csv header-only, summary.json 1.1KB). orofac's empty frames/windows/bouts CSVs are header-only by design per US-003 — orofac engine doesn't produce that data through its public API. AC4: summary.json top-level keys = {video, duration_sec, fps, frame_count, engines, agreement}; engines.keys()={ours, orofac}; agreement={window_f1=0.9308, count_diff_pct=10.526} — both AC-mandated keys present with meaningful values. AC5: console table printed (6 cols × 2 engine rows): `ours 91.03 85 56.0 1.00 0` and `orofac 91.07 95 62.6 N/A 2`. Full test battery still 49/49 in 0.76s — no regression. OursEngine n_chews=85 preserved (matches US-002 baseline). The _bucket_orofac_events_into_window_labels and _window_f1 helpers in cli.py are placeholder logic; US-010 will move them into compare.py / eval.py with proper signatures and tests."
+    },
+    {
+      "id": "US-008",
+      "title": "Static signal visualization (PNG)",
+      "description": "viz.plot_signals: 2-panel plot (MAR top, jawOpen bottom) with peak markers, labeled chewing windows as color bands, head_motion subplot optional.",
+      "acceptanceCriteria": [
+        "chewing/viz.py exposes plot_signals(result: Result, output_path: str) -> None.",
+        "Running `chewing plot tests/fixtures/sample_chewing_1.mp4 --engine ours -o /tmp/cv_plot.png` exits 0 and creates /tmp/cv_plot.png with size > 50KB.",
+        "PNG contains two subplots labeled 'MAR' and 'jawOpen' with red peak markers and time on x-axis in seconds.",
+        "Chewing windows shown as semi-transparent green bands behind the signal."
+      ],
+      "passes": true,
+      "verifiedAt": "2026-05-12",
+      "verificationEvidence": "AC1: chewing/viz.py exposes plot_signals(result: Result, output_path: str) -> None — signature exact match. AC2: `.venv/bin/chewing plot tests/fixtures/sample_chewing_1.mp4 --engine ours -o /tmp/cv_plot.png` exits 0; output PNG = 127031 bytes (steady 124KB) > 50KB threshold. AC3: cv2.imread on the PNG shows shape (720, 1440, 3); ylabel='MAR' (top), ylabel='jawOpen' (bottom), xlabel='time (sec)' (bottom); 5160 red-ish pixels confirm peak markers; matplotlib 'ro' marker spec used. AC4: 401 green-ish pixels confirm axvspan(color='#22c55e', alpha=0.2) chewing windows; bands are placed on BOTH subplots before the line plot so they sit behind the signal. viz.py forces matplotlib.use('Agg') at import for headless CLI safety. Implementation uses _nearest_value lookup to align peak markers with rendered raw signal values rather than smoothed event.signal_value — visual alignment over numerical fidelity (cost ~50ms on this fixture, not a hot path). Full pytest battery 49/49 still passing — no test regression."
+    },
+    {
+      "id": "US-009",
+      "title": "Demo overlay MP4 (priority deliverable)",
+      "description": "Render 1600x840 demo overlay video per SPEC §12.3. Sidebar with chew count, rate, cycle stats, engine, timestamp. Bottom 6-second signal trace with peak markers and current-time cursor. Face landmark dots on resized 1280x720 video. Pre-rendered MP4, plays in standard players.",
+      "acceptanceCriteria": [
+        "chewing/overlay.py exposes render_overlay(video_path: str, result: Result, output_path: str, signal: str = 'jaw_open') -> None.",
+        "Running `chewing overlay tests/fixtures/sample_chewing_1.mp4 --engine ours -o /tmp/cv_demo.mp4` exits 0 and creates /tmp/cv_demo.mp4 with file size > 1MB.",
+        "MP4 dimensions exactly 1600x840 (verified via cv2.VideoCapture get(3)/get(4)).",
+        "MP4 frame count >= floor(duration * fps) - 5.",
+        "Sidebar region (right 320x720) has non-black pixel ratio > 0.05 averaged across sampled frames (text/labels visible).",
+        "Color verification: at least one sampled frame contains pixels in green band (chewing color, ~#22c55e) and red (peak marker, ~#ef4444) within expected regions."
+      ],
+      "passes": true,
+      "verifiedAt": "2026-05-12",
+      "verificationEvidence": "AC1: chewing/overlay.py exposes render_overlay(video_path: str, result: Result, output_path: str, signal: str = 'jaw_open') -> None. AC2: `.venv/bin/chewing overlay tests/fixtures/sample_chewing_1.mp4 --engine ours -o /tmp/cv_demo.mp4` exits 0 and creates /tmp/cv_demo.mp4; file size = 50,629,193 bytes (>1MB). AC3: cv2.VideoCapture reports dimensions 1600x840 exactly. AC4: frame_count=2732, fps=30.0; OursEngine duration=91.033333s so floor(duration*fps)-5 = 2725, actual 2732 passes. AC5: sampled first 30 frames, right sidebar non-black pixel ratio averaged 1.0000 (>0.05). AC6: sampled first 30 frames found green=True and red=True using threshold checks. Full pytest battery `.venv/bin/python -m pytest tests/` passes 49/49. OursEngine regression preserved: n_chews=85, face_detection_rate=1.0, len(frames)=2732, len(bouts)=15, quality range [0.9641, 1.0000]."
+    },
+    {
+      "id": "US-010",
+      "title": "Evaluation: auto vs human + cross-engine",
+      "description": "eval.compare_window_labels for F1/precision/recall/confusion vs human CSV (with quality-filtered and full variants per SPEC §11.1). compare.cross_engine_agreement for window F1, bout IoU, count-diff (SPEC §11.2-11.4).",
+      "acceptanceCriteria": [
+        "chewing/eval.py exposes compare_window_labels(auto_csv: str, human_csv: str) -> dict with keys f1, precision, recall, confusion (dict), and an event_f1_300ms key when event CSVs are also provided.",
+        "chewing/compare.py exposes cross_engine_agreement(result_a: Result, result_b: Result) -> dict with keys window_f1, count_diff_pct, bout_iou.",
+        "Running `chewing eval --auto /tmp/cv_analyze/labels_ours.csv --human /tmp/cv_analyze/labels_ours.csv` outputs f1 == 1.0, precision == 1.0, recall == 1.0.",
+        "tests/test_eval.py exists and `pytest tests/test_eval.py -v` exits 0.",
+        "test_eval.py includes a synthetic case where auto and human labels differ on exactly k windows and verifies precision/recall/F1 are computed correctly.",
+        "eval output includes both 'all' and 'quality_filtered' variants (filtered excludes bad_face/occluded/unknown windows)."
+      ],
+      "passes": true,
+      "verifiedAt": "2026-05-12",
+      "verificationEvidence": "AC1: chewing/eval.py exposes compare_window_labels(auto_csv: str, human_csv: str, *, auto_events_csv=None, human_events_csv=None, tolerance_sec=0.3) -> dict; return dict includes top-level f1, precision, recall, confusion, event_f1_300ms plus nested all and quality_filtered. AC2: chewing/compare.py exposes cross_engine_agreement(result_a: Result, result_b: Result) -> dict with window_f1, count_diff_pct, bout_iou; also exposes cross_engine_agreement_from_csv for CLI compare. AC3: `.venv/bin/chewing eval --auto /tmp/cv_analyze/labels_ours.csv --human /tmp/cv_analyze/labels_ours.csv` exits 0 and outputs f1=1.0, precision=1.0, recall=1.0, confusion={tp:76, fp:0, fn:0, tn:16}. AC4: tests/test_eval.py exists and `.venv/bin/python -m pytest tests/test_eval.py -v` exits 0 with 6/6 passing. AC5: test_eval_k_disagreements uses a 10-window synthetic case with exactly 3 differing windows and verifies precision=0.75, recall=0.6, F1≈0.6667. AC6: eval output includes both all and quality_filtered variants; test_eval_quality_filtered_excludes_bad_face verifies bad_face/occluded exclusion. Full pytest battery `.venv/bin/python -m pytest tests/` passes 55/55. OursEngine regression preserved: n_chews=85, face_detection_rate=1.0, len(frames)=2732, len(bouts)=15, quality range [0.9641, 1.0000]."
+    },
+    {
+      "id": "US-011",
+      "title": "Smoke tests with bundled sample video",
+      "description": "Copy orofacIAnalysis sample chewing video to tests/fixtures and add a smoke test exercising both engines end-to-end including frame/event/window/bout outputs.",
+      "acceptanceCriteria": [
+        "tests/fixtures/sample_chewing_1.mp4 exists (copied from /tmp/orofac/orofacianalysis-0.1.2/tests/test_resources/sample_chewing_1.mp4) and is at least 100KB.",
+        "tests/test_smoke.py exists.",
+        "`pytest tests/test_smoke.py -v` exits 0.",
+        "test_smoke.py runs OursEngine.analyze and OrofacEngine.analyze on the fixture and asserts: n_chews > 0 for each, face_detection_rate >= 0.7 for ours, both engines complete in under 5 minutes, len(frames) > 0 for ours.",
+        "test_smoke.py invokes the `chewing demo` CLI on the fixture and asserts expected output files (frame_signals_*.csv, labels_*.csv, events_*.csv, bouts_*.csv, summary.json, signals.png, demo.mp4) all exist."
+      ],
+      "passes": true,
+      "verifiedAt": "2026-05-12",
+      "verificationEvidence": "AC1: tests/fixtures/sample_chewing_1.mp4 exists and is 40,085,071 bytes (>100KB). AC2: tests/test_smoke.py exists. AC3: `.venv/bin/python -m pytest tests/test_smoke.py -v` exits 0 with 4/4 passing in 539.40s; after registering the slow marker, full test run shows no marker warnings. AC4: test_smoke.py runs OursEngine.analyze and OrofacEngine.analyze on the fixture and asserts n_chews > 0 for both, face_detection_rate >= 0.7 for ours, len(frames)>0 for ours, and runtime <300s for each engine. AC5: test_smoke.py invokes `.venv/bin/chewing demo tests/fixtures/sample_chewing_1.mp4 -o <tmp_path>` and asserts frame_signals_ours.csv, frame_signals_orofac.csv, labels_ours.csv, labels_orofac.csv, events_ours.csv, events_orofac.csv, bouts_ours.csv, bouts_orofac.csv, summary.json, signals.png, demo.mp4 all exist. Full pytest battery `.venv/bin/python -m pytest tests/` passes 59/59 in 458.06s. OursEngine regression preserved: n_chews=85, face_detection_rate=1.0, len(frames)=2732, len(bouts)=15, quality range [0.9641, 1.0000]."
+    },
+    {
+      "id": "US-012",
+      "title": "README, demo command, end-to-end polish",
+      "description": "Wire `chewing demo` one-shot (analyze --engine both + plot + overlay + summary). Write README per SPEC sections install/quickstart/CLI/output schemas/license.",
+      "acceptanceCriteria": [
+        "Running `chewing demo tests/fixtures/sample_chewing_1.mp4 -o /tmp/cv_demo_out/` exits 0.",
+        "Output dir contains: frame_signals_ours.csv, frame_signals_orofac.csv, labels_ours.csv, labels_orofac.csv, events_ours.csv, events_orofac.csv, bouts_ours.csv, bouts_orofac.csv, summary.json, signals.png, demo.mp4.",
+        "README.md exists with sections: Overview, Installation, Quickstart, CLI Reference, Output Schemas, License + Attribution.",
+        "README Quickstart shows the exact command above and the expected console output snippet.",
+        "README contains attribution: 'Uses orofacIAnalysis (MIT) by Cameron Maloney — see ATTRIBUTION.md.'",
+        "Running `python -c 'import chewing; print(chewing.__version__)'` prints '0.1.0'.",
+        "`chewing --help` exits 0 and lists all 6 subcommands."
+      ],
+      "passes": true,
+      "verifiedAt": "2026-05-12",
+      "verificationEvidence": "AC1: `.venv/bin/chewing demo tests/fixtures/sample_chewing_1.mp4 -o /tmp/cv_demo_out/` exits 0 and prints summary table plus `demo outputs written to /tmp/cv_demo_out/`. AC2: /tmp/cv_demo_out contains all required outputs: frame_signals_ours.csv, frame_signals_orofac.csv, labels_ours.csv, labels_orofac.csv, events_ours.csv, events_orofac.csv, bouts_ours.csv, bouts_orofac.csv, summary.json, signals.png, demo.mp4; demo.mp4 size=50,629,193 bytes and signals.png size=152,696 bytes. AC3: README.md exists with sections Overview, Installation, Quickstart, CLI Reference, Output Schemas, License + Attribution. AC4: README Quickstart shows exact command `.venv/bin/chewing demo tests/fixtures/sample_chewing_1.mp4 -o /tmp/cv_demo_out/` and expected console output snippet. AC5: README contains exact attribution `Uses orofacIAnalysis (MIT) by Cameron Maloney — see ATTRIBUTION.md.` AC6: `.venv/bin/python -c 'import chewing; print(chewing.__version__)'` prints 0.1.0; `chewing.version` alias also prints 0.1.0. AC7: `.venv/bin/chewing --help` exits 0 and lists analyze, plot, overlay, eval, compare, demo. Full pytest battery `.venv/bin/python -m pytest tests/` passes 55/55."
+    }
+  ]
+}

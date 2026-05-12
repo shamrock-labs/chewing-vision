@@ -1,0 +1,16 @@
+.venv/
+__pycache__/
+*.pyc
+
+# 영상 원본 (커밋 금지)
+*.mp4
+*.mov
+*.mkv
+*.webm
+*.avi
+
+# MediaPipe 모델 (런타임에 다운로드)
+face_landmarker.task
+
+# 결과물
+*.png

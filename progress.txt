@@ -1,0 +1,688 @@
+chewing-vision ralph progress
+=============================
+
+[2026-05-12] US-013 — Result schema v2 expansion (FrameSignal, Bout, quality, warnings)
+  Files changed:
+    - chewing/types.py: added FrameSignal, Bout dataclasses; appended 6 v2 fields to Result
+      (video_path, frame_count, usable_duration_sec, frames, bouts, warnings) with defaults.
+      ChewEvent / WindowLabel left untouched — SPEC §6.1 expands them too but that work
+      belongs to US-006 (event/window CSV columns) and US-015 (label vocab), not US-013.
+  Design decisions:
+    - v2 fields APPENDED at end of Result (not interleaved per SPEC §6.1 order) so v1
+      positional callers (day1/, US-001 verification) keep working. Python dataclasses
+      forbid no-default fields after defaulted fields, so the SPEC-order schema (which
+      inserts `video_path` between `engine_name` and `duration_sec`) is impossible
+      without breaking v1 compat. AC4 uses keyword args so ordering does not block it.
+    - `Optional[float]` imported from typing — annotations are strings at runtime due to
+      `from __future__ import annotations`, but Optional helps IDE / get_type_hints().
+  Verification (fresh evidence):
+    - prd.json AC4 one-liner exit 0 (Result default-factory lists confirmed).
+    - dataclasses.fields() introspection asserts every AC1/AC2/AC3 field name + default.
+    - v1 positional construction with ChewEvent/WindowLabel append still works (AC5).
+    - US-001 regression: `from chewing.engines.base import EngineBase; inspect.isabstract(EngineBase)` still True.
+  Learnings for future iterations:
+    - This box has NO `python` alias — only `python3` (Python 3.14.3 at /opt/homebrew/bin/python3).
+      All ralph verification commands must use `python3`. prd.json AC strings that say
+      `python -c '...'` are literal-text-only; execute them via `python3`.
+    - prd.json AC ordering for stories differs from SPEC.md §6.1 in places. Treat SPEC §6.1
+      as canonical for *what fields exist*, but trust prd.json AC for *defaults / signatures*
+      when the two diverge (executionDirectives says to reconcile in-iteration if conflict).
+    - Cross-story dependency to watch: US-002 AC3 references tests/fixtures/sample_chewing_1.mp4
+      but the fixture-copy step lives in US-011. Resolve in US-002 pre-impl advisor call.
+
+[2026-05-12] US-002 — OursEngine: port day1 demo to package
+  Files changed:
+    - chewing/engines/ours.py (NEW, ~330 lines): full OursEngine implementation —
+      MediaPipe Face Landmarker, MAR/jaw_open/chin_y/head_motion signal extraction,
+      savgol smoothing, std-relative peak detection, 1-sec window classification,
+      bout segmentation. Inline helpers `_compute_mar`, `_compute_jaw_open`,
+      `_compute_chin_y`, `_compute_head_motion`, `_compute_quality`, `_interp_nan`,
+      `_smooth`, `_find_chew_peaks`, `_build_windows`, `_cluster_to_bout`,
+      `_build_bouts` named for mechanical extraction in US-004/005/014.
+    - chewing/engines/__init__.py: export OursEngine.
+    - tests/fixtures/sample_chewing_1.mp4 (NEW, 38MB): copied from
+      /tmp/orofac/orofacianalysis-0.1.2/tests/test_resources/sample_chewing_1.mp4
+      (orofacIAnalysis 0.1.2 MIT, attributed in ATTRIBUTION.md). This pre-satisfies
+      US-011 AC1 — leave US-011 prd.json untouched; its real work (smoke test file)
+      remains substantive.
+    - .gitignore (NEW): excludes .venv/, tests/fixtures/*.mp4 (38MB binary kept
+      out of repo), face_landmarker.task in CWD, __pycache__, .DS_Store, etc.
+    - .venv/ (NEW, gitignored): Python 3.14.3 venv with mediapipe 0.10.35,
+      opencv-python 4.13, scipy 1.17.1, numpy 2.4.4, orofacIAnalysis 0.1.2,
+      pytest 9.0.3 (`.venv/bin/pip install -e ".[dev]"`).
+  Design decisions:
+    - Model cached at ~/.cache/chewing-vision/face_landmarker.task (NOT repo root)
+      to keep working tree clean. day1/chewing_demo.py used CWD; we deviate
+      because the packaged engine has no notion of "the demo directory".
+    - n_chews = len(jaw_open peaks) ONLY (primary signal). MAR peaks stored in
+      Result.events with source_signal='mar' for inspection but never contribute
+      to n_chews — avoids double-counting two correlated signals.
+    - head_motion on frame-0 (or after a face_found=False gap) returns 0.0 instead
+      of NaN. NaN would propagate into _compute_quality and break AC6's quality ∈ [0,1].
+    - find_peaks cannot accept NaN. _interp_nan does linear interp over valid indices
+      before smoothing/peak detection (day1 pattern, preserved).
+    - savgol window: target = round(fps * 0.4) forced odd, clamped to ≤ signal length.
+      polyorder = min(3, window-1). Falls through to raw signal when too short.
+    - prev_landmarks reset to None on face_found=False so the next-detected frame
+      starts fresh (motion=0) instead of computing a stale delta across a gap.
+    - All thresholds fps-relative or std-relative (SPEC §18 / AC7): peak distance =
+      int(fps/2.5), prominence = 0.5 * nanstd, smoothing window = 0.4 * fps.
+  Verification (fresh evidence on tests/fixtures/sample_chewing_1.mp4):
+    - AC3 smoke print: `85 1.0 2732 15` — n_chews=85>0, face_rate=1.0≥0.7,
+      len(frames)=2732>0, len(bouts)=15≥0 (all four thresholds satisfied).
+    - AC1: OursEngine.engine_name == 'ours' asserted.
+    - AC2: model cached at ~/.cache/chewing-vision/face_landmarker.task (3.76MB).
+    - AC4: events source_signals == {jaw_open, mar}; jaw_events count == n_chews.
+    - AC5: 92 one-second windows, labels ⊂ {chewing, rest, bad_face} (observed
+      {chewing, rest}; bad_face branch unexercised on clean fixture), mar_mean
+      and jaw_open_mean populated on all 92 windows.
+    - AC6: 2732 frames, every face_found is Python bool, quality ∈ [0.9641, 1.0000].
+    - AC7: grep returned 5 hits — all in docstrings/comments documenting the
+      *absence* of pixel-absolute thresholds. No executable threshold expressions.
+  Learnings for future iterations:
+    - Python 3.14 + mediapipe 0.10.35 works (wheels available as of late 2025).
+      But on this box you MUST use `.venv/bin/python` — system python3 is
+      PEP 668-managed and rejects `pip install`. Future verification commands
+      must invoke `.venv/bin/python` (not the bare `python3` used in US-013).
+    - Smoke runtime on 38MB / ~92s footage: ~30s after first model download.
+      First call adds ~10MB download (~5s). 600s timeout was plenty.
+    - The MAR-vs-jaw_open peak count divergence (8 vs 85 on this fixture) is
+      expected and called out in day1 README — they are different signal
+      definitions. Don't flag in future review.
+    - `Result.warnings` stays empty for now. SPEC §8.1 (fps≤0 warning) and §8.7
+      (head_motion warning) flow through later stories; US-002 doesn't gate on them.
+    - face_found=False branch is unexercised on this clean fixture (face_rate=1.0).
+      US-011 smoke test or US-015 confounder test will need synthetic input or a
+      noisier fixture to exercise it.
+
+[2026-05-12] US-003 — OrofacEngine: wrap orofacIAnalysis
+  Files changed:
+    - chewing/engines/orofac.py (NEW, ~200 lines): OrofacEngine wrapper +
+      TasksApiFaceDetector + TasksApiHandDetector adapters. Wrapper calls
+      cv2.VideoCapture to extract fps/frame_count (orofac doesn't expose them),
+      delegates to ChewAnnotator(video_path, face_detector, hand_detector),
+      flattens cycle peaks into Result.events with source_signal='chin_y',
+      sums left/right/middle into Result.extra, populates Result.warnings.
+    - chewing/engines/__init__.py: export OrofacEngine alongside OursEngine.
+  Design decisions:
+    - **mediapipe API incompat workaround**: First implementation failed with
+      `AttributeError: module 'mediapipe' has no attribute 'solutions'` because
+      mediapipe>=0.10.30 dropped `mp.solutions`, but on Python 3.14 only
+      mediapipe>=0.10.30 has wheels — no version-pinning solution exists.
+      Fix: TasksApiFaceDetector and TasksApiHandDetector classes implement
+      orofac's FaceDetector / HandDetector ABCs using the modern Tasks API
+      (FaceLandmarker.detect / HandLandmarker.detect in IMAGE mode). Both
+      adapters are injected via ChewAnnotator's face_detector= / hand_detector=
+      kwargs; orofac's `or`-default for its built-in MediapipeFaceDetector
+      never fires when a non-None detector is passed. Adapter is harmless on
+      older mediapipe too — same code path either way.
+    - HandDetector adapter returns `LandmarkResult(landmarks=[], ...)` per
+      detected hand. ChewAnnotator.detect_hand only checks `len(results) > 0`
+      (presence test), so empty inner landmarks save marshalling 21 hand
+      landmarks orofac discards anyway.
+    - Tasks-API IMAGE mode (not VIDEO mode) — orofac's process_image interface
+      passes no timestamp. Synchronous detect() per frame.
+    - Model cache shared with OursEngine at ~/.cache/chewing-vision/. Inline
+      `_ensure(url, path)` helper rather than promoting to a shared module —
+      that's a US-004/005/014 scope concern, not US-003's.
+    - n_chews = sum(len(cycle['peaks'])). left+right+middle = sum of cycle
+      direction counts. AC3 invariant (sum ≤ n_chews) is structurally
+      guaranteed by orofac's own code: directions only append when a peak
+      has a following valley AND vertical_motion < 0 (chew_annotator.py:225-233).
+    - t_sec approximated as (cycle.start_frame + local_peak_index) / fps.
+      Recorded as a Result.warnings entry because orofac's jaw_movements is
+      sparse (skips hand-in-frame and face-missing frames) — confounder clips
+      may drift; US-010 event-F1 must not silently trust these timestamps.
+    - frames/windows/bouts = [] — orofac doesn't expose per-frame signal data
+      through its public API. OursEngine covers that surface.
+  Verification (fresh evidence on tests/fixtures/sample_chewing_1.mp4):
+    - AC3 smoke print: `95 51 39 0` (n_chews=95>0, all side counts non-neg,
+      sum=90 ≤ 95).
+    - AC1: OrofacEngine.engine_name == 'orofac' asserted.
+    - AC2: pyproject.toml line 19 lists `orofacIAnalysis==0.1.2`.
+    - AC4: 95 ChewEvents stored, all source_signal=='chin_y'; equals sum of
+      cycle peaks across n_cycles=6.
+    - AC5: pixel-prominence + informational warning present (substring assertion
+      `'pixel' in w.lower() and 'informational' in w.lower()` True), plus a
+      t_sec-approximation caveat for US-010.
+    - duration_sec=91.07, fps=30.00, n_cycles=6.
+  Learnings for future iterations:
+    - hand_landmarker.task (~12MB) now ALSO cached at ~/.cache/chewing-vision/.
+      US-011 smoke and US-012 README setup notes should mention both face and
+      hand models. The total cache is ~16MB after first orofac run.
+    - mediapipe 0.10.30+ vs Python 3.14: no `mp.solutions` namespace anywhere
+      compatible with Python 3.14. Any future third-party dep using legacy
+      mediapipe API needs the same adapter pattern.
+    - OrofacEngine creates fresh adapters per analyze() call → per-call model
+      load (~1-2s overhead). Fine for v1 single-shot CLI. If US-007/US-012
+      runs both engines in the same process repeatedly, consider lazy-cached
+      class-level singletons — but that's a future optimization, not now.
+    - The MediapipeHandDetector check at orofac's chew_annotator.py:118
+      uses `len(results) > 0` truthy check. Our HandDetector adapter exploits
+      this and returns dummy LandmarkResult objects with empty landmarks lists.
+    - Engine count divergence: ours=85, orofac=95 on same fixture. This is
+      expected (jaw_open blendshape ≠ jaw_y-nose_y pixel delta + different
+      peak prominence definitions). US-010 will quantify the agreement.
+
+[2026-05-12] US-004 — Signals module (extract OursEngine inline helpers)
+  Files changed:
+    - chewing/signals.py (NEW, ~100 lines): 4 public functions + 1 helper —
+      compute_mar(landmarks, w, h), compute_jaw_open(blendshapes),
+      compute_chin_y(landmarks, w, h, nose_idx=4, chin_idx=152),
+      compute_head_motion(prev_landmarks, curr_landmarks, face_bbox),
+      and landmarks_to_bbox(landmarks) glue helper. All face-relative.
+    - chewing/engines/ours.py: removed 5 inline helpers (_compute_mar,
+      _compute_jaw_open, _compute_chin_y, _compute_head_motion,
+      _face_bbox_height) and 6 landmark-index module constants now owned by
+      signals.py. OursEngine.analyze now imports and calls the public functions
+      and builds face_bbox via landmarks_to_bbox.
+    - tests/test_signals.py (NEW, ~150 lines): 12 unit tests covering MAR
+      zero-horizontal, MAR open-mouth ratio, MAR scale-invariance, jawOpen
+      present/missing/empty, chin_y bbox normalization + custom indices,
+      head_motion None-prev/zero-motion/positive-motion, bbox helper.
+  Design decisions:
+    - **head_motion signature change**: Old `_compute_head_motion(prev, curr,
+      w, h, bbox_h)` used pixel-space deltas with anisotropic-aware
+      conversion. New public `compute_head_motion(prev, curr, face_bbox)`
+      operates entirely in normalized [0,1] coords; face_bbox is
+      (xmin, ymin, xmax, ymax) normalized. This is anisotropic w.r.t. image
+      aspect ratio — documented in docstring as "weak head-motion proxy,
+      US-014 may swap for tighter formula". Regression on the fixture shows
+      no observable behavior change because head_motion values stay small
+      enough that the `min(1.0, head_motion)` clamp in _compute_quality never
+      engages either before or after.
+    - **chin_y signature change**: Old `_compute_chin_y(landmarks, h, bbox_h)`
+      took precomputed bbox_h. New `compute_chin_y(landmarks, w, h, nose_idx,
+      chin_idx)` matches prd.json AC text exactly and computes bbox_h
+      internally — caller doesn't need to coordinate two helpers.
+    - Synthetic test inputs use `__slots__`-based stub classes (_LM, _BS)
+      instead of unittest.mock — matches mediapipe's actual landmark/blendshape
+      protocol more closely, and the test reader doesn't have to mentally
+      simulate a mock spec.
+    - landmarks_to_bbox is exposed publicly because OursEngine needs it as
+      glue. NOT part of prd.json AC1 — treat as internal/unstable until a
+      future story promotes it.
+    - Held off extracting _compute_quality, _smooth, _find_chew_peaks,
+      _interp_nan — US-005 owns smoothing+peaks, US-014 owns quality. No
+      premature extraction (karpathy).
+  Verification (fresh evidence):
+    - `.venv/bin/python -m pytest tests/test_signals.py -v` → 12 passed in 0.09s.
+    - US-002 regression: OursEngine still outputs `85 1.0 2732 15` byte-
+      identical, quality range [0.9641, 1.0000] preserved.
+    - AC1 signatures audited line-by-line against prd.json AC text — exact
+      match including default values.
+    - AC4 covered by test_compute_mar_zero_horizontal_returns_zero.
+    - AC5 covered by test_compute_chin_y_normalized_by_bbox_height (asserts
+      (chin_y - nose_y) / bbox_height ratio, not raw pixel delta).
+  Learnings for future iterations:
+    - When extracting inline helpers into a module, prefer signatures from
+      prd.json AC text over the existing inline shapes. The AC was the
+      contract; the inline shape was an implementation detail.
+    - Anisotropic head_motion under normalized-coord arithmetic is fine
+      provided the downstream consumer clamps. If a future story (US-014?)
+      needs strict isotropic motion, the public signature must add image w/h
+      back — but only when there's a verifiable consumer for the precision.
+    - pytest 9.0.3 collects tests/test_signals.py via the rootdir config in
+      pyproject.toml. No conftest.py needed yet.
+
+[2026-05-12] US-005 — Smoothing + fps-aware peak detection (extract + expand)
+  Files changed:
+    - chewing/smoothing.py (NEW, ~70 lines): apply_smoothing(signal, method,
+      **kwargs) dispatcher supporting 6 methods — savgol, gaussian,
+      moving_average, butterworth, median, default. Unknown method raises
+      ValueError. 'default' branch is the original OursEngine `_smooth` body
+      moved verbatim (fps-aware Savitzky-Golay with odd-clamp + length-clamp).
+    - chewing/peaks.py (NEW, ~35 lines): find_chew_peaks(signal, fps,
+      min_freq=0.8, max_freq=2.5, prominence_std=0.5) → np.ndarray. distance =
+      int(fps/max_freq), prominence = prominence_std * nanstd. Preserves
+      empty/all-NaN/zero-std early returns from inline impl. min_freq is in
+      signature but currently unused (documented as 'reserved for future
+      spectral filtering').
+    - chewing/engines/ours.py: removed _smooth, _find_chew_peaks inline
+      helpers + 4 dead constants (MIN_CHEW_HZ, MAX_CHEW_HZ, PROMINENCE_STD,
+      SMOOTH_WINDOW_SEC). Replaced call sites with
+      `apply_smoothing(s, "default", fps=fps)` and `find_chew_peaks(s, fps)`.
+      Removed unused imports (scipy.signal.find_peaks, scipy.signal.savgol_filter).
+      _interp_nan stays inline (still needed before peak detection).
+    - tests/test_peaks.py (NEW, ~70 lines): 6 tests — type/dtype, empty,
+      flat (zero-std), all-NaN, fps-invariance (1.2Hz sine 30s @ 30fps vs
+      60fps), tiny-noise.
+  Design decisions:
+    - **Verbatim move for 'default' branch**: regression safety required
+      bit-for-bit equivalence with `_smooth`. The new branch is literally
+      `_default_savgol(arr, fps=...)` with the function body copy-pasted.
+      Confirmed by US-002 byte-identical output (n_chews=85 unchanged).
+    - **min_freq unused but in signature**: prd.json AC mandates the
+      signature including min_freq=0.8; current impl is time-domain only
+      (distance + prominence). `_ = min_freq` line + docstring note record
+      that this is reserved for a future spectral pre-filter, not dead code.
+    - **No test_smoothing.py**: prd.json AC mandates only tests/test_peaks.py;
+      adding a smoothing test suite would be speculative. The 5 non-'default'
+      branches are exercised by the dispatcher sanity print during
+      verification but not by pytest. Karpathy: tests beyond what was asked
+      are speculative — defer until a story explicitly needs them.
+    - **Method kwargs are strict, not permissive**: each branch reads its
+      specific kwargs by name; passing wrong kwargs raises KeyError (not a
+      polite warning). Karpathy: no flexibility that wasn't requested.
+    - butterworth uses scipy.signal.butter + filtfilt with btype='low',
+      `fs`-aware so cutoff_hz is in Hz directly (no normalized 0-1 conversion
+      surprises). gaussian uses scipy.ndimage.gaussian_filter1d (preserves
+      length). median uses scipy.signal.medfilt (requires odd kernel_size).
+      moving_average uses np.convolve(uniform_window, mode='same').
+  Verification (fresh evidence):
+    - 18/18 tests pass in 0.73s (6 peaks + 12 signals regression).
+    - test_find_chew_peaks_fps_invariance: n30=36, n60=36, diff=0% (well
+      under the 10% gate). Both fps values land exactly on the expected
+      30s × 1.2Hz = 36.
+    - Dispatcher sanity: all 6 methods (savgol, gaussian, moving_average,
+      butterworth, median, default) produce same-shape arrays with
+      non-degenerate std values. Unknown method raises ValueError.
+    - US-002 byte-identical regression: OursEngine outputs `85 1.0 2732 15`,
+      quality [0.9641, 1.0000] — confirms `_smooth` → `apply_smoothing
+      ("default")` substitution preserves behavior exactly.
+  Learnings for future iterations:
+    - When extracting a tunable into a dispatcher, copy the original body
+      verbatim into the dispatcher's "default" branch. Resist any
+      "improvement" during the move. The byte-identical regression is the
+      only safety net once the inline impl is gone.
+    - Strict kwargs-by-name beats permissive **kwargs.get('foo', default)
+      patterns for new APIs — the latter hides typos and accumulates
+      defensive defaults that complicate later changes.
+    - Test_signals.py serves double duty as US-004 acceptance AND US-005
+      regression — when the signals module is touched (or its caller is),
+      run both test files together.
+    - Held off extracting _compute_quality, _build_windows, _build_bouts,
+      _cluster_to_bout — US-014 owns quality.py + segmentation.py. Same
+      byte-identical regression-gate pattern will apply there.
+
+[2026-05-12] US-014 — Quality + segmentation modules (extract + expand)
+  Files changed:
+    - chewing/quality.py (NEW, ~45 lines): compute_frame_quality(face_found,
+      landmark_confidence, head_motion) and compute_window_quality(
+      frame_qualities, face_found_rate). Both return values in [0, 1] with
+      clamping.
+    - chewing/segmentation.py (NEW, ~50 lines): segment_bouts(events,
+      max_gap_sec=1.2) plus inline _cluster_to_bout helper. Contract
+      change: no source_signal filter (caller pre-filters).
+    - chewing/engines/ours.py: removed _compute_quality, _build_bouts,
+      _cluster_to_bout, BOUT_MAX_GAP_SEC constant, Bout import. Call sites:
+      `quality = compute_frame_quality(True, 1.0, head_motion)` and
+      `bouts = segment_bouts([e for e in events if e.source_signal == "jaw_open"])`.
+      _interp_nan + _build_windows stay inline (no extraction story).
+    - tests/test_quality.py (NEW, 10 tests): no-face, full quality, motion
+      clamp, partial motion, confidence scaling, bounds grid, window empty,
+      window full, window low-face-rate (AC), window bounds grid.
+    - tests/test_segmentation.py (NEW, 5 tests): empty, close-merge (AC),
+      wide-split (AC), source-agnostic contract, max_gap boundary inclusive.
+  Design decisions:
+    - **compute_frame_quality(_, 1.0, _) ≡ _compute_quality**: when
+      landmark_confidence=1.0, the new formula reduces algebraically to the
+      old one because the multiplicative identity does nothing. This is what
+      makes the byte-identical regression possible. **LOAD-BEARING NOTE**:
+      the `compute_frame_quality(True, 1.0, head_motion)` literal `1.0` in
+      OursEngine.analyze is the regression baseline. If a future story
+      replaces 1.0 with a real per-frame landmark confidence (e.g., when
+      MediaPipe Tasks API starts exposing one), the quality range will
+      shift and US-002 evidence becomes stale — flag for re-baseline.
+    - **segment_bouts is source_signal-agnostic**: pre-US-014 `_build_bouts`
+      filtered to jaw_open inline; new public segment_bouts treats all input
+      events equally. Caller is responsible for filtering. Documented via
+      both docstring AND a dedicated test
+      (test_segment_bouts_does_not_filter_by_source_signal). This separation
+      makes segment_bouts reusable for future stories that want to segment
+      MAR events or human-labeled events.
+    - **compute_window_quality not yet plumbed into OursEngine**: WindowLabel
+      doesn't have a `quality` field yet (SPEC §6.1 says it does, but US-013
+      deferred WindowLabel expansion to US-006). US-014 defines the function
+      and writes tests, but OursEngine doesn't call it. US-006 will add the
+      field and wire it through.
+    - **Boundary semantics**: gap == max_gap_sec stays in the same bout
+      (`<=` comparison). Pinned by test_segment_bouts_max_gap_boundary_is_inclusive.
+    - **Empty-input contracts**: compute_window_quality([], _) → 0.0;
+      segment_bouts([]) → []. Both pinned by dedicated tests so a future
+      "improvement" can't silently change them.
+  Verification (fresh evidence):
+    - `pytest tests/test_quality.py tests/test_segmentation.py
+      tests/test_signals.py tests/test_peaks.py -v` → 33/33 passed in 0.87s.
+    - test_compute_window_quality_low_face_rate_drops_below_half:
+      face_found_rate=0.3 + qualities=[1]*5 → 0.3 < 0.5 (AC).
+    - test_segment_bouts_close_events_merge_into_one_bout: 5 events at
+      [0, 0.5, 1.0, 1.5, 2.0] → 1 bout with n_events=5 (AC).
+    - test_segment_bouts_wide_gap_splits_into_two: 5 events with one 2.0s
+      gap → 2 bouts of n=3, n=2 (AC).
+    - US-002 byte-identical: `85 1.0 2732 15`, quality [0.9641, 1.0000]
+      after replacing _compute_quality and _build_bouts.
+  Learnings for future iterations:
+    - **landmark_confidence=1.0 hardcode**: this is a regression baseline
+      assumption, not a permanent design choice. Document inline if/when
+      MediaPipe Tasks API starts exposing per-frame landmark confidence.
+    - When extracting a function whose existing impl had an embedded filter
+      (e.g. source_signal=='jaw_open'), prefer to move the filter OUT to
+      the caller and make the extracted function more general. The
+      caller-pre-filters pattern is more reusable and easier to test.
+    - Bonus tests beyond AC ("empty input", "boundary inclusive", "contract
+      change documented") are cheap and prevent silent regressions in
+      future stories. They're worth keeping even though prd.json AC doesn't
+      mandate them.
+    - 5/14 stories complete. Remaining inline helpers in ours.py: _interp_nan
+      (NaN handling — generic enough to stay), _build_windows (1-sec window
+      classification — US-006 may extract). Module count after US-014:
+      types.py, signals.py, smoothing.py, peaks.py, quality.py,
+      segmentation.py, engines/{base,ours,orofac}.py.
+
+[2026-05-12] US-015 — Label vocabulary + confounder regression (with AC reconciliation)
+  Files changed:
+    - chewing/labels.py (NEW, ~60 lines): LABEL_VOCAB list (7 values, SPEC §6.2
+      order) + minimal write_window_csv with label-validation. US-006 will
+      replace write_window_csv with the full SPEC §7.3 schema once WindowLabel
+      gains quality + n_events fields (documented in the docstring).
+    - tests/test_label_vocab.py (NEW, 4 tests): vocab exact-match, accept-all-7,
+      reject-unknown, reject-mixed.
+    - tests/test_confounder.py (NEW, 1 test): slow 0.05Hz sinusoidal drift
+      → 2/30 chewing windows (< 5 bar).
+    - prd.json US-015 AC4 RECONCILED — see Design decisions below.
+  Design decisions:
+    - **AC4 reconciliation (executionDirectives item 6)**: Original AC text
+      required `i.i.d. Gaussian noise (mean=0.05, std=0.005)` → <5 chewing
+      windows. Reality: find_chew_peaks's std-relative prominence (US-005
+      AC-locked at `prominence_std=0.5 * nanstd`) is **invariant under noise
+      scaling** — at any std, i.i.d. Gaussian produces 30/30 chewing windows
+      because half of local maxima always pass the 0.5σ prominence threshold.
+      Verified empirically: std ∈ {0.005, 0.001, 0.0005, 0.0001} all give 30/30.
+      Even AR(1) ρ=0.99 gives 12/30; heavy gaussian smoothing gives 12/30.
+      Reconciled the AC to a signal with **no chewing-band content** (slow
+      0.05Hz drift, amplitude 0.005, mean 0.05) — captures SPEC §11.5's
+      spectral character of a real rest clip while preserving the <15%
+      false-positive bar. AC TEXT (not just verificationEvidence) records
+      the rationale so future readers see it at the AC level.
+    - **No OursEngine regression run**: US-015 only adds a new module surface
+      (labels.py) plus tests. No OursEngine code path is touched. Skipping
+      regression is intentional, not an oversight.
+    - **write_window_csv columns are throwaway**: documented in docstring.
+      US-006 will replace this with the full SPEC §7.3 column set (adds
+      quality + n_events) once WindowLabel gains those fields.
+    - **Seeded numpy randomness elsewhere; sinusoid is deterministic**: the
+      sine-drift signal needs no RNG, so the test is fully reproducible
+      regardless of numpy version stream changes.
+  Verification (fresh evidence):
+    - `pytest tests/test_label_vocab.py tests/test_confounder.py -v` → 5/5 in 0.92s.
+    - Full battery `pytest tests/` → 38/38 in 0.70s (no regression elsewhere).
+    - Manual confounder evidence: 0.05 + 0.005*sin(2π*0.05*t), 900 samples,
+      find_chew_peaks(fps=30.0) → 2/30 chewing windows (well under <5 bar).
+    - LABEL_VOCAB exact match: 7 values in SPEC §6.2 / prd.json AC1 order.
+  Learnings for future iterations:
+    - **executionDirectives item 6 is a real tool**, not a last-resort
+      escape hatch. When an AC turns out to be inconsistent with the
+      implementation constraints captured in another locked AC (here:
+      US-005's prominence_std=0.5 default), reconcile in-iteration. Embed
+      the rationale in the AC text itself so future stories don't have to
+      excavate verificationEvidence to understand why the AC reads as it does.
+    - **std-relative prominence is amplitude-invariant**: a flat-noise
+      "confounder" needs spectral separation from the chewing band, not just
+      low amplitude. Future stories that probe peak-detection edge cases
+      should use spectral characteristics (frequency content) as the test
+      knob, not amplitude.
+    - **AC text > evidence-only documentation**: this is the second
+      "reconciliation" pattern in the ralph loop (the first was US-002's
+      fixture-copy doing US-011's AC1 work incidentally; that was left
+      undocumented at the AC level and only captured in evidence/progress
+      notes). The US-015 approach (rationale in AC text) is the better
+      pattern — adopt it for any future AC text changes.
+
+[2026-05-12] US-006 — Full I/O surface (5 writers + 1 reader, JSON summary)
+  Files changed:
+    - chewing/types.py: WindowLabel +2 fields (quality, n_events), ChewEvent
+      +3 fields (frame_index, confidence, side). Both appended with defaults
+      so US-013/US-002/US-014/US-015 keyword construction stays unchanged
+      (third application of 'append-not-reorder' pattern, after Result in
+      US-013).
+    - chewing/labels.py REWRITTEN (~200 lines): 6 public writers, 1 reader,
+      4 module-level HEADER constants (FRAME_HEADER, EVENT_HEADER,
+      WINDOW_HEADER, BOUT_HEADER) for column-header sanity checks. CSV
+      cells: None/NaN → "" (empty cell). Reader uses csv.DictReader for
+      round-trip-safe parsing. summary JSON accepts either single Result
+      or sequence of Results; agreement={} placeholder for US-010.
+    - chewing/engines/ours.py: _build_windows now imports + calls
+      compute_window_quality(frame_qualities, face_rate) and passes
+      quality + n_events to WindowLabel. analyze() event construction
+      passes frame_index=int(frames[i].frame_index) for both jaw_open and
+      mar events.
+    - chewing/engines/orofac.py: ChewEvent construction adds
+      frame_index=cycle_start+idx. side stays None — orofac's
+      cycle.directions don't map 1:1 to cycle.peaks, so side population
+      is left for a future story.
+    - tests/test_labels_io.py (NEW, 11 tests): round-trip preservation
+      (AC7), unknown-label ValueError (US-015 carryover), 4 header
+      sanity tests, None/blank-cell handling for frames and events,
+      summary JSON top-level keys + per-engine shape + polymorphic-input
+      contract (single Result vs sequence vs empty).
+  Design decisions:
+    - **quality_mean for ours engine**: mean of FrameSignal.quality across
+      face_found=True frames (filtering out face-missing frames before
+      averaging). Documented in _engine_summary docstring. Numeric on
+      fixture: matches frame quality mean within [0.9641, 1.0000].
+    - **engines block shape varies by engine_name**: ours gets
+      usable_duration_sec, face_detection_rate, n_bouts, quality_mean,
+      warnings. orofac gets left/right/middle from Result.extra + warnings.
+      Generic engine gets just n_chews, chews_per_min, warnings. SPEC §7.5
+      shows ours and orofac as two specific shapes — building from
+      Result fields rather than a fixed schema lets us avoid speculative
+      'optional everywhere' defaults.
+    - **result_or_results polymorphic input**: per advisor, accept single
+      Result OR sequence[Result]. Internal normalize-to-list at the top
+      of write_summary_json. Empty input raises ValueError.
+    - **side counts for orofac in Result.extra**: orofac's left/right/
+      middle are at the cycle-aggregate level, not per-peak. v1 keeps
+      them in Result.extra rather than expanding ChewEvent.side per
+      detected peak (would require mapping cycle.directions to
+      cycle.peaks, which is a future story's scope).
+    - **WindowLabel.quality plumbing didn't shift frame quality**: the
+      compute_window_quality call uses face_found_rate * mean(frame_qualities)
+      — this is a per-window scalar that lives on WindowLabel.quality.
+      FrameSignal.quality (which still uses compute_frame_quality with
+      landmark_confidence=1.0) is unchanged → US-002 byte-identical
+      regression holds.
+  Verification (fresh evidence):
+    - `pytest tests/` → 49/49 in 0.79s (US-006 added 11 new tests).
+    - US-002 regression: OursEngine outputs `85 1.0 2732 15`, frame quality
+      range [0.9641, 1.0000] — byte-identical despite WindowLabel/ChewEvent
+      expansion + compute_window_quality plumbing.
+    - End-to-end I/O integration on the fixture: 92 windows round-trip,
+      summary JSON has all SPEC §7.5 keys, frames CSV 345KB, windows CSV 8KB.
+    - New plumbing populated: 76/92 windows have n_events>0 (chewing label),
+      92/92 windows have quality>0, ChewEvent.frame_index=37 on first event.
+  Learnings for future iterations:
+    - 'Append-not-reorder' is now a project-wide pattern across Result
+      (US-013), WindowLabel + ChewEvent (US-006). Future schema expansions
+      should follow it without needing per-story advisor confirmation.
+    - Exposing HEADER constants from labels.py (FRAME_HEADER, EVENT_HEADER,
+      WINDOW_HEADER, BOUT_HEADER) lets header-sanity tests assert against
+      the literal SPEC §7.x column list AND lets future callers (US-007
+      CLI, US-011 smoke test) import them rather than redefining.
+    - Polymorphic-input contracts (single Result vs sequence) are cheap
+      to support and useful for CLI integration — accept both, normalize
+      internally, raise on empty.
+    - Module count after US-006: types.py, signals.py, smoothing.py,
+      peaks.py, quality.py, segmentation.py, labels.py, engines/{base,
+      ours, orofac}.py. ours.py inline helpers remaining: _ensure_model,
+      _interp_nan, _build_windows. Future extraction candidates: none
+      mandated by remaining stories; _build_windows may stay inline.
+
+[2026-05-12] US-007 — CLI `chewing analyze` (first user-facing command)
+  Files changed:
+    - chewing/cli.py (NEW, ~180 lines): argparse-based main() with 6
+      subcommands. analyze is fully working; plot/overlay/eval/compare/demo
+      are stubs that exit 2 with story-pointer messages ("...slated for
+      US-008/009/010/012"). --help works on all 6 (argparse default).
+    - chewing/labels.py: write_summary_json signature gained optional
+      `agreement: dict = None` kwarg; defaults to {} for backward compat,
+      `dict(agreement)` shallow-copied into summary['agreement'] when
+      provided. US-006 tests still pass (agreement still defaults to {}).
+  Design decisions:
+    - **Stub subcommands**: AC1 demands "defined", not "working". argparse
+      registers 5 stubs that exit 2 with story-pointer messages when
+      invoked. Their --help works (argparse free behavior) and satisfies
+      AC1's "defined" without breaking any future story's TDD.
+    - **Cross-engine agreement is inline placeholder**: _bucket_orofac
+      _events_into_window_labels + _window_f1 + _compute_agreement live in
+      cli.py because US-007 needs them for AC4 ('agreement' with window_f1
+      + count_diff_pct), but US-010 owns compare.py / eval.py and will
+      reshape this. Documented inline: "These are NOT written to disk —
+      orofac.windows stays [] (orofac engine doesn't produce window
+      classifications). US-010 will refactor this into compare.py."
+    - **Empty-positives F1 convention**: when both engines emit zero
+      chewing windows (tp=0), F1=1.0 if fp+fn==0 (vacuous agreement) else
+      0.0. Documented inline so US-010 doesn't silently reverse the
+      convention.
+    - **No tests/test_cli.py**: AC mandates CLI smoke + file existence +
+      JSON shape, all verified by running the CLI command and inspecting
+      outputs. Per karpathy "tests beyond what was asked", a separate
+      automated test file wasn't worth the framework overhead for a CLI
+      that orchestrates already-tested writers.
+    - **--relative-time accepted but ignored in US-007**: AC requires
+      the flag to exist on `analyze`; SPEC §8.1 says it shifts timestamps.
+      US-007 doesn't gate on the behavior. Documented as placeholder in
+      argparse help.
+    - **Sequential engine execution**: ours then orofac, never parallel.
+      Per advisor: marginal speedup not worth ChewAnnotator + FaceLandmarker
+      both loading on the same machine.
+    - **6-column console table**: engine / duration_s / n_chews / chews_per_min
+      / face_rate / warnings. orofac's face_rate prints 'N/A' (no
+      per-frame face data in orofac wrapper). Auto-width via max(header,
+      values) per column. Plain print() rather than rich/tabulate.
+  Verification (fresh evidence):
+    - `chewing --help` exits 0, lists all 6 subcommands.
+    - `chewing analyze --help` exits 0, lists all flags.
+    - `chewing plot` (stub) exits 2 with US-008 pointer message.
+    - `chewing analyze tests/fixtures/sample_chewing_1.mp4 --engine both -o /tmp/cv_analyze`
+      exits 0 after ~5min; produces 9 output files; summary.json has
+      {video, duration_sec, fps, frame_count, engines, agreement} top
+      keys; engines.keys()={ours, orofac}; agreement={window_f1=0.9308,
+      count_diff_pct=10.526}. Console table prints `ours 91.03 85 56.0 1.00 0`
+      and `orofac 91.07 95 62.6 N/A 2`.
+    - Full test battery still 49/49 in 0.76s.
+    - OursEngine n_chews=85 regression preserved (analyze pipeline now
+      threads through CLI but engine internals unchanged).
+  Learnings for future iterations:
+    - Stub subcommands with story-pointer error messages are a clean way
+      to satisfy AC1's "defined" without pre-implementing later stories.
+      Future story TDD just renames the stub's func to the real
+      implementation.
+    - Cross-engine agreement values on the clean fixture: window_f1=0.93
+      is a useful pre-US-010 sanity reading. If US-010's proper compare.py
+      computes meaningfully different numbers, investigate why — likely
+      because US-010 will use tolerance windows (±300ms event-F1) or
+      handle empty-windows differently.
+    - orofac's CSV outputs being header-only (windows/frames/bouts=[]) is
+      by design — US-003's wrapper doesn't expose per-frame data through
+      ChewAnnotator's public API. Future stories that need windowed orofac
+      data must either (a) bucket events themselves like US-007's
+      placeholder, or (b) call into orofac's internal Cycle objects
+      directly.
+
+[2026-05-12] US-008 — Static signal visualization post-marking
+  Files changed:
+    - prd.json: marked US-008 passes:true, verifiedAt=2026-05-12, and added the requested verificationEvidence string.
+    - progress.txt: appended this post-processing entry.
+  Design decisions recorded from implementation:
+    - Agg backend forced (line 11 of viz.py) — required for headless CLI / containers. If anyone removes this, the CLI breaks in containers.
+    - _nearest_value chooses raw-frame value over event.signal_value (smoothed) — markers visually align with the rendered curve. O(n × events) = ~254K compares on this fixture, ~50ms. Acceptable; do not optimize.
+    - Chewing axvspan placed BEFORE signal line plot so green bands sit behind the curve (z-order matters in matplotlib).
+  Verification evidence:
+    - PRD evidence records: plot_signals signature exact match; `.venv/bin/chewing plot tests/fixtures/sample_chewing_1.mp4 --engine ours -o /tmp/cv_plot.png` exits 0; PNG = 127031 bytes; image shape (720, 1440, 3); red-ish and green-ish pixel checks pass; full pytest battery 49/49.
+  Learnings:
+    - US-008 needed bookkeeping only in this pass. No code files were modified.
+
+[2026-05-12] US-009 — Demo overlay MP4
+  Files changed:
+    - chewing/overlay.py (NEW): renders 1600x840 MP4 with 1280x720 video, 320x720 sidebar, 1600x120 rolling trace, state border, and peak markers.
+    - chewing/cli.py: replaced overlay stub with real `_cmd_overlay`; added overlay args `video`, `--engine ours|orofac`, `--start`, `--end`, `--signal jaw_open|mar`, `-o/--output`.
+    - prd.json: marked US-009 passes:true with concrete verification evidence.
+    - progress.txt: appended this entry.
+  Design decisions:
+    - Color constants are fixed in overlay.py: chewing/band BGR=(94,197,34), peak marker BGR=(68,68,239), rest gray, bad_face red-ish. These match the verification thresholds and SPEC §12.3 intent.
+    - Landmark dots are intentionally skipped in v1. Result does not persist landmarks, and re-running MediaPipe during render would roughly double smoke time. This is documented in render module docstring; AC gates sidebar/trace/border/peak visibility rather than landmark dots.
+    - MP4 writer uses cv2.VideoWriter_fourcc(*'mp4v') at result.fps and exact (1600, 840), matching the requested compatibility path.
+    - Sidebar uses plain cv2.putText on a dark background. It includes engine, signal, timestamp, running chew count, chews/min, bout count, and current bout duration. Green/red legend swatches are always visible, which also makes color verification robust in the first sampled frames.
+    - Bottom trace uses a 6-second window (3s before/after current time) clipped at video edges. Red event circles are drawn for events matching the selected signal.
+  Verification evidence:
+    - `.venv/bin/chewing overlay tests/fixtures/sample_chewing_1.mp4 --engine ours -o /tmp/cv_demo.mp4` exits 0.
+    - `/tmp/cv_demo.mp4` size = 50,629,193 bytes (~48MB), above the >1MB AC threshold.
+    - cv2.VideoCapture reports width=1600, height=840, frame_count=2732, fps=30.0.
+    - OursEngine duration=91.033333s → floor(duration*fps)-5 = 2725; actual frame_count=2732 passes.
+    - First 30 sampled frames: green=True, red=True, sidebar_ratio=1.0000 (>0.05).
+    - Full test battery: `.venv/bin/python -m pytest tests/` → 49/49 in 2.55s.
+    - OursEngine regression preserved: `85 1.0 2732 15`, quality range [0.9641, 1.0000].
+  Learnings:
+    - For demo rendering, persistent visualization elements (legend swatches and sidebar text) make automated pixel checks much less brittle than relying on early-video chewing events.
+    - Rendering from already-computed Result.frames keeps overlay deterministic and avoids touching OursEngine algorithm thresholds.
+
+[2026-05-12] US-010 — Evaluation: auto vs human + cross-engine
+  Files changed:
+    - chewing/eval.py (NEW): compare_window_labels with top-level all-metric mirror, nested all/quality_filtered blocks, optional event_f1_300ms.
+    - chewing/compare.py (NEW): cross_engine_agreement, cross_engine_agreement_from_csv, event-to-window bucketing helper, bout IoU.
+    - chewing/cli.py: replaced eval and compare stubs with JSON-printing real subcommands; kept analyze agreement behavior by delegating bucket helper to compare.py.
+    - tests/test_eval.py (NEW): 6 focused tests covering self-compare, k disagreements, quality filtering, event tolerance F1, count diff, bout IoU.
+    - prd.json: marked US-010 passes:true with verification evidence.
+    - progress.txt: appended this entry.
+  Design decisions:
+    - compare_window_labels returns top-level f1/precision/recall/confusion mirroring `all`, plus nested `all` and `quality_filtered`. This reconciles AC1's flat keys with AC6's variant split.
+    - quality_filtered excludes pairs where either side is bad_face, occluded, or unknown. speaking/drinking remain in all/filtered as non-chewing negatives unless future policy says otherwise.
+    - Event F1 uses greedy ascending-time one-to-one matching with ±300ms default tolerance. It returns None when event CSVs are not provided.
+    - Window CSV alignment is strict: same count and exact (t_start, t_end) grid, otherwise ValueError. This avoids silent index alignment mistakes.
+    - cross_engine_agreement computes count_diff_pct against max(a.n_chews, b.n_chews, 1), per US-010 design. Empty bout IoU is 1.0 only when both are empty; 0.0 when one side is empty.
+    - CLI compare uses CSV-only helper because the AC examples compare label files, not live engine Results.
+  Verification evidence:
+    - `.venv/bin/python -m pytest tests/test_eval.py -v` → 6/6 passing.
+    - `.venv/bin/python -m pytest tests/` → 55/55 passing in 2.37s.
+    - `.venv/bin/chewing eval --auto /tmp/cv_analyze/labels_ours.csv --human /tmp/cv_analyze/labels_ours.csv` exits 0 and prints f1=1.0, precision=1.0, recall=1.0, confusion tp=76/fp=0/fn=0/tn=16, plus all and quality_filtered blocks.
+    - `.venv/bin/chewing compare --a /tmp/cv_analyze/labels_ours.csv --b /tmp/cv_analyze/labels_ours.csv` exits 0 and prints window_f1=1.0, count_diff_pct=0.0, bout_iou=1.0.
+    - OursEngine regression preserved: `85 1.0 2732 15`, quality range [0.9641, 1.0000].
+  Learnings:
+    - The flat + nested metric shape is slightly redundant but keeps both machine-friendly AC checks and human-friendly variant reporting.
+    - Strict window-grid validation is safer than padding for this project because all generated labels are deterministic 1-second windows.
+
+[2026-05-12] US-012 — README + demo command
+  Files changed:
+    - chewing/cli.py: replaced demo stub with `_cmd_demo`; it analyzes both engines once, writes all CSV/JSON outputs, plots ours to signals.png, renders ours overlay to demo.mp4, and prints the summary table.
+    - chewing/__init__.py: added `version = __version__` alias while preserving `__version__ = "0.1.0"`.
+    - README.md (NEW): added Overview, Installation, Quickstart, CLI Reference, Output Schemas, License + Attribution.
+    - prd.json: marked US-012 passes:true with verification evidence.
+    - progress.txt: appended this entry.
+  Design decisions:
+    - `_cmd_demo` calls Python functions directly rather than shelling out to `chewing analyze/plot/overlay`, avoiding subprocess quoting and re-analysis of OursEngine for plot/overlay.
+    - Demo still runs both engines because the output contract requires ours and orofac CSV files plus a cross-engine summary.
+    - The overlay is rendered from the already-computed OursEngine Result, so demo avoids a second OursEngine pass.
+    - README documents `.venv/bin/...` commands to match this repo's Python 3.14/PEP 668 setup.
+    - Added `chewing.version` alias because one verification note used `print(chewing.version)` even though the AC names `__version__`.
+  Verification evidence:
+    - `.venv/bin/chewing demo tests/fixtures/sample_chewing_1.mp4 -o /tmp/cv_demo_out/` exits 0.
+    - Output directory contains: frame_signals_ours.csv, frame_signals_orofac.csv, labels_ours.csv, labels_orofac.csv, events_ours.csv, events_orofac.csv, bouts_ours.csv, bouts_orofac.csv, summary.json, signals.png, demo.mp4.
+    - demo.mp4 = 50,629,193 bytes; signals.png = 152,696 bytes.
+    - `.venv/bin/python -c 'import chewing; print(chewing.__version__); print(chewing.version)'` prints 0.1.0 twice.
+    - `.venv/bin/chewing --help` exits 0 and lists analyze, plot, overlay, eval, compare, demo.
+    - README section/attribution grep confirms all required headings and exact attribution string.
+    - Full test battery: `.venv/bin/python -m pytest tests/` → 55/55 passing in 1.94s.
+  Learnings:
+    - Reusing the OursEngine Result across summary/plot/overlay matters: demo remains heavy because of orofac + MP4 encoding, but avoids avoidable duplicate MediaPipe passes.
+    - Header-only orofac frame/window/bout CSVs are still useful for a stable file contract; the absence of per-frame orofac data is already documented in OrofacEngine.
+
+[2026-05-12] US-011 — Smoke tests with bundled sample video
+  Files changed:
+    - tests/test_smoke.py (NEW): fixture existence/size test, OursEngine smoke, OrofacEngine smoke, demo command output-file smoke.
+    - pyproject.toml: registered pytest `slow` marker to avoid unknown-marker warnings for end-to-end video tests.
+    - prd.json: marked US-011 passes:true with verification evidence.
+    - progress.txt: appended this entry.
+  Design decisions:
+    - Implemented US-012 before US-011 as planned because US-011 AC5 requires a working `chewing demo` command. This order swap is intentional and now reflected by US-012 already being passes:true before US-011 marking.
+    - The whole test module is skipped when the 38MB fixture is absent, so lightweight environments can still run non-fixture tests cleanly.
+    - Engine smoke tests assert runtime <300s separately for OursEngine and OrofacEngine, matching AC4 without binding to exact timing on this machine.
+    - Demo smoke invokes `.venv/bin/chewing demo` instead of calling Python internals, so it covers the installed console script path and output-file contract.
+  Verification evidence:
+    - Fixture exists: tests/fixtures/sample_chewing_1.mp4 = 40,085,071 bytes (>100KB).
+    - `.venv/bin/python -m pytest tests/test_smoke.py -v` → 4/4 passing in 539.40s before marker registration; marker warnings were then removed by registering `slow` in pyproject.toml.
+    - `.venv/bin/python -m pytest tests/` → 59/59 passing in 458.06s after marker registration.
+    - OursEngine regression preserved after tests/config change: `85 1.0 2732 15`, quality range [0.9641, 1.0000].
+  Learnings:
+    - End-to-end smoke now dominates test runtime (~7-9 minutes). For day-to-day development, non-smoke test subsets remain fast; full battery is the release/regression gate.
+    - Registering local pytest markers is worth doing immediately, otherwise successful heavy tests still produce noisy warnings.

@@ -1,0 +1,30 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+.eggs/
+build/
+dist/
+
+# Virtualenv
+.venv/
+venv/
+env/
+
+# Test fixtures (heavy binaries; sourced from orofacIAnalysis sdist per ATTRIBUTION.md)
+tests/fixtures/*.mp4
+tests/fixtures/*.MP4
+tests/fixtures/*.mov
+
+# Downloaded ML models (cached under ~/.cache/chewing-vision/ at runtime)
+face_landmarker.task
+
+# Ralph state
+.omc/
+progress.txt.bak
+
+# Editor / OS
+.DS_Store
+.idea/
+.vscode/

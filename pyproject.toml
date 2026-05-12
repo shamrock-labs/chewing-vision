@@ -1,0 +1,38 @@
+[build-system]
+requires = ["setuptools>=61", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "chewing-vision"
+version = "0.1.0"
+description = "Chewing detection, labeling, and demo visualization from video"
+authors = [{ name = "bohyeong" }]
+license = { text = "MIT" }
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "mediapipe>=0.10.14",
+    "opencv-python>=4.9",
+    "numpy>=1.24",
+    "scipy>=1.11",
+    "matplotlib>=3.7",
+    "orofacIAnalysis==0.1.2",
+    "pandas>=2.0",
+    "Pillow>=10.0",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=7.4"]
+
+[project.scripts]
+chewing = "chewing.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["chewing*"]
+exclude = ["tests*", "day1*", "examples*"]
+
+[tool.pytest.ini_options]
+markers = [
+    "slow: end-to-end video smoke tests",
+]
