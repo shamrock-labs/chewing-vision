@@ -1,0 +1,296 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AirPods IMU 씹기 감지 파이프라인</title>
+<script src="https://cdn.jsdelivr.net/npm/mermaid/dist/mermaid.min.js"></script>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; background: #0f0f0f; color: #e0e0e0; padding: 32px; line-height: 1.6; }
+  h1 { font-size: 1.6rem; font-weight: 700; color: #fff; margin-bottom: 4px; }
+  .subtitle { color: #888; font-size: 0.95rem; margin-bottom: 40px; }
+
+  .pipeline { display: flex; align-items: center; gap: 0; margin-bottom: 48px; flex-wrap: wrap; }
+  .stage { background: #1a1a1a; border: 1px solid #2a2a2a; border-radius: 12px; padding: 16px 20px; cursor: pointer; transition: all 0.2s; min-width: 130px; text-align: center; }
+  .stage:hover, .stage.active { border-color: #4f9eff; background: #1a2a3a; }
+  .stage .icon { font-size: 1.8rem; margin-bottom: 6px; }
+  .stage .name { font-size: 0.8rem; font-weight: 600; color: #ccc; }
+  .stage .sub { font-size: 0.72rem; color: #666; margin-top: 2px; }
+  .arrow { color: #444; font-size: 1.4rem; padding: 0 8px; }
+
+  .detail { background: #141414; border: 1px solid #2a2a2a; border-radius: 16px; padding: 28px; margin-bottom: 48px; min-height: 200px; transition: all 0.3s; }
+  .detail h2 { font-size: 1.1rem; color: #4f9eff; margin-bottom: 8px; }
+  .detail .why { font-size: 0.88rem; color: #aaa; margin-bottom: 20px; padding-bottom: 16px; border-bottom: 1px solid #222; }
+  .detail .why strong { color: #e0e0e0; }
+
+  .data-example { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  @media (max-width: 700px) { .data-example { grid-template-columns: 1fr; } }
+
+  .data-box { background: #1a1a1a; border-radius: 10px; padding: 16px; }
+  .data-box h3 { font-size: 0.78rem; text-transform: uppercase; letter-spacing: 0.08em; color: #666; margin-bottom: 10px; }
+  pre { font-family: "SF Mono", "Menlo", monospace; font-size: 0.78rem; line-height: 1.7; color: #b8c8e0; overflow-x: auto; }
+  .highlight { color: #7dd3a8; font-weight: 600; }
+  .muted { color: #555; }
+
+  .metrics { display: flex; gap: 16px; flex-wrap: wrap; margin-top: 20px; }
+  .metric { background: #1a2a1a; border: 1px solid #2a4a2a; border-radius: 10px; padding: 14px 20px; text-align: center; }
+  .metric .val { font-size: 1.6rem; font-weight: 700; color: #7dd3a8; }
+  .metric .lbl { font-size: 0.75rem; color: #666; margin-top: 2px; }
+
+  .feature-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-top: 16px; }
+  .feature-item { background: #1a1a2a; border: 1px solid #2a2a4a; border-radius: 8px; padding: 10px 14px; font-size: 0.8rem; }
+  .feature-item .fname { color: #9b8fe0; font-family: monospace; }
+  .feature-item .fdesc { color: #666; font-size: 0.73rem; margin-top: 2px; }
+
+  .mermaid { background: #141414; border-radius: 12px; padding: 24px; margin-bottom: 48px; }
+
+  .tip { background: #1a1a00; border: 1px solid #3a3a00; border-radius: 8px; padding: 12px 16px; font-size: 0.83rem; color: #b8b060; margin-top: 16px; }
+
+  .nav-hint { text-align: center; font-size: 0.8rem; color: #555; margin-bottom: 20px; }
+</style>
+</head>
+<body>
+
+<h1>🎧 AirPods IMU 씹기 감지 파이프라인</h1>
+<p class="subtitle">영상으로 정답 만들기 → IMU로 학습 → 영상 없이 실시간 감지</p>
+
+<div class="mermaid">
+flowchart LR
+    V["📹 영상\n(iPhone 전면카메라)"]
+    CV["🔬 chewing-vision\n(MediaPipe MAR 분석)"]
+    GT["📋 GT 라벨\n(1초 window\nchewing/rest)"]
+    IMU["📡 AirPods IMU\n(50Hz, 6축)"]
+    WIN["🪟 슬라이딩 윈도우\n(2초, stride 0.5s)"]
+    FE["🔢 특징 추출\n(12-dim)"]
+    RF["🌲 Random Forest\n(트리 100개)"]
+    OUT["✅ 예측\nchewing / rest"]
+    CM["📱 Core ML\n(.mlmodel)"]
+
+    V --> CV --> GT
+    IMU --> WIN --> FE
+    GT -.->|"정답지 제공\n(학습 시에만)"| RF
+    FE --> RF --> OUT
+    RF -->|"학습 완료 후"| CM
+
+    style GT fill:#1a2a1a,stroke:#4a8a4a,color:#7dd3a8
+    style RF fill:#1a1a2a,stroke:#4a4a8a,color:#9b8fe0
+    style CM fill:#2a1a1a,stroke:#8a4a4a,color:#e08080
+    style OUT fill:#1a2a2a,stroke:#4a8a8a,color:#7dd3c8
+</div>
+
+<p class="nav-hint">아래 단계를 클릭하면 실제 데이터 예시를 볼 수 있습니다</p>
+
+<div class="pipeline">
+  <div class="stage active" onclick="show('imu')" id="btn-imu">
+    <div class="icon">📡</div>
+    <div class="name">IMU 입력</div>
+    <div class="sub">50Hz · 6축</div>
+  </div>
+  <div class="arrow">→</div>
+  <div class="stage" onclick="show('window')" id="btn-window">
+    <div class="icon">🪟</div>
+    <div class="name">윈도우 분할</div>
+    <div class="sub">2s · stride 0.5s</div>
+  </div>
+  <div class="arrow">→</div>
+  <div class="stage" onclick="show('feature')" id="btn-feature">
+    <div class="icon">🔢</div>
+    <div class="name">특징 추출</div>
+    <div class="sub">12-dim vector</div>
+  </div>
+  <div class="arrow">→</div>
+  <div class="stage" onclick="show('label')" id="btn-label">
+    <div class="icon">📋</div>
+    <div class="name">GT 라벨</div>
+    <div class="sub">vision 정답지</div>
+  </div>
+  <div class="arrow">→</div>
+  <div class="stage" onclick="show('model')" id="btn-model">
+    <div class="icon">🌲</div>
+    <div class="name">RF 학습</div>
+    <div class="sub">트리 100개</div>
+  </div>
+  <div class="arrow">→</div>
+  <div class="stage" onclick="show('result')" id="btn-result">
+    <div class="icon">✅</div>
+    <div class="name">결과</div>
+    <div class="sub">F1 = 0.79</div>
+  </div>
+</div>
+
+<div class="detail" id="detail">
+
+  <!-- IMU -->
+  <div id="panel-imu">
+    <h2>📡 AirPods IMU 입력</h2>
+    <p class="why"><strong>왜 이 데이터?</strong> 씹을 때 아래턱이 위아래로 반복 운동 → 귀에 꽂힌 AirPods가 함께 흔들림 → Y축 회전(rotation_y)과 Y축 가속도(user_accel_y)에 규칙적인 진동 패턴이 나타남.</p>
+    <div class="data-example">
+      <div class="data-box">
+        <h3>씹는 중 (chewing)</h3>
+        <pre>t_rel_sec  rotation_y  user_accel_y
+0.4149     <span class="highlight">-0.034</span>      <span class="highlight">0.078</span>
+0.4349     <span class="highlight">-0.019</span>      <span class="highlight">0.062</span>
+0.4549     <span class="highlight">-0.041</span>      <span class="highlight">0.081</span>
+0.4749     <span class="highlight">-0.028</span>      <span class="highlight">0.055</span>
+<span class="muted">↑ Y축이 규칙적으로 진동</span></pre>
+      </div>
+      <div class="data-box">
+        <h3>쉬는 중 (rest)</h3>
+        <pre>t_rel_sec  rotation_y  user_accel_y
+3.0149     <span class="muted">-0.002</span>      <span class="muted">0.004</span>
+3.0349     <span class="muted"> 0.001</span>      <span class="muted">0.003</span>
+3.0549     <span class="muted">-0.001</span>      <span class="muted">0.002</span>
+3.0749     <span class="muted"> 0.000</span>      <span class="muted">0.001</span>
+<span class="muted">↑ 거의 움직임 없음</span></pre>
+      </div>
+    </div>
+  </div>
+
+  <!-- Window -->
+  <div id="panel-window" style="display:none">
+    <h2>🪟 슬라이딩 윈도우 분할</h2>
+    <p class="why"><strong>왜 2초?</strong> 씹기 한 사이클이 0.5~1초. 2초 윈도우면 2~4번 씹는 패턴이 들어간다. 너무 짧으면 패턴 파악 불가, 너무 길면 chewing/rest 경계가 섞임.</p>
+    <div class="data-box">
+      <h3>145초 세션 → 287개 윈도우</h3>
+      <pre>전체: ──────────────────────────────── 145s
+      [─── 2s ───]                       윈도우 1
+          [─── 2s ───]                   윈도우 2  (0.5s 이동)
+              [─── 2s ───]               윈도우 3
+                  ...
+                             [─── 2s ───] 윈도우 287
+
+<span class="highlight">chewing: 204개 (71%)</span>
+<span class="muted">rest:    83개  (29%)</span></pre>
+    </div>
+  </div>
+
+  <!-- Feature -->
+  <div id="panel-feature" style="display:none">
+    <h2>🔢 특징 추출 (12-dim)</h2>
+    <p class="why"><strong>왜 12개?</strong> 2초 분량 ~100개 샘플을 그대로 쓰면 모델이 복잡해짐. 6개 축에서 "에너지 크기(RMS)"와 "불규칙성(Std)" 각 1개씩만 뽑으면 12개로 압축 가능. 핵심 정보는 유지됨.</p>
+    <div class="feature-grid">
+      <div class="feature-item"><div class="fname">rotation_y_rms</div><div class="fdesc">Y축 회전 에너지 ★★★</div></div>
+      <div class="feature-item"><div class="fname">rotation_y_std</div><div class="fdesc">Y축 회전 불규칙성 ★★★</div></div>
+      <div class="feature-item"><div class="fname">user_accel_y_rms</div><div class="fdesc">Y축 가속도 에너지 ★★★</div></div>
+      <div class="feature-item"><div class="fname">user_accel_y_std</div><div class="fdesc">Y축 가속도 불규칙성 ★★</div></div>
+      <div class="feature-item"><div class="fname">rotation_x_rms</div><div class="fdesc">X축 회전 에너지 ★★</div></div>
+      <div class="feature-item"><div class="fname">rotation_x_std</div><div class="fdesc">X축 회전 불규칙성 ★</div></div>
+      <div class="feature-item"><div class="fname">rotation_z_rms</div><div class="fdesc">Z축 회전 에너지 ★</div></div>
+      <div class="feature-item"><div class="fname">rotation_z_std</div><div class="fdesc">Z축 회전 불규칙성</div></div>
+      <div class="feature-item"><div class="fname">user_accel_x_rms</div><div class="fdesc">X축 가속도 에너지</div></div>
+      <div class="feature-item"><div class="fname">user_accel_x_std</div><div class="fdesc">X축 가속도 불규칙성</div></div>
+      <div class="feature-item"><div class="fname">user_accel_z_rms</div><div class="fdesc">Z축 가속도 에너지</div></div>
+      <div class="feature-item"><div class="fname">user_accel_z_std</div><div class="fdesc">Z축 가속도 불규칙성</div></div>
+    </div>
+    <div class="tip">★ 개수 = 상대적 중요도 (Random Forest feature importance 기준)</div>
+  </div>
+
+  <!-- Label -->
+  <div id="panel-label" style="display:none">
+    <h2>📋 GT 라벨 (chewing-vision 정답지)</h2>
+    <p class="why"><strong>왜 영상 기반?</strong> IMU 데이터에는 정답이 없다. 영상에서 입 움직임(MAR)을 분석하면 "언제 씹었는지" 알 수 있다. 이 정답지를 기반으로 IMU 모델을 학습시키는 것이 핵심 전략.</p>
+    <div class="data-example">
+      <div class="data-box">
+        <h3>chewing-vision 출력 (labels_ours.csv)</h3>
+        <pre>t_start  t_end   label      quality
+0.0      1.0     <span class="muted">rest</span>       0.987
+1.0      2.0     <span class="highlight">chewing</span>    0.991
+2.0      3.0     <span class="highlight">chewing</span>    0.992
+3.0      4.0     <span class="muted">rest</span>       0.988
+...</pre>
+      </div>
+      <div class="data-box">
+        <h3>윈도우 라벨 부여 방식</h3>
+        <pre>윈도우: 1.0s ~ 3.0s
+
+  포함된 vision 라벨:
+    1.0~2.0: <span class="highlight">chewing</span>
+    2.0~3.0: <span class="highlight">chewing</span>
+
+  chewing 비율: 2/2 = 100%
+  ≥ 50% → 이 윈도우 = <span class="highlight">chewing</span></pre>
+      </div>
+    </div>
+    <div class="tip">학습이 끝나면 vision 라벨은 더 이상 필요 없다. 배포 후엔 IMU만으로 동작.</div>
+  </div>
+
+  <!-- Model -->
+  <div id="panel-model" style="display:none">
+    <h2>🌲 Random Forest 학습</h2>
+    <p class="why"><strong>왜 Random Forest?</strong> 데이터가 적을 때(~300 윈도우) 딥러닝(CNN/LSTM)은 과적합됨. RF는 100개 단순 결정 트리의 투표 결과라 작은 데이터에서 안정적이고 해석 가능.</p>
+    <div class="data-example">
+      <div class="data-box">
+        <h3>트리 1개의 판단 (단순화)</h3>
+        <pre>rotation_y_rms > 0.031?
+├─ YES → user_accel_y_rms > 0.044?
+│        ├─ YES → <span class="highlight">chewing</span>
+│        └─ NO  → <span class="muted">rest</span>
+└─ NO  → <span class="muted">rest</span>
+
+100개 트리 투표:
+  72개 "chewing" → <span class="highlight">chewing</span> 판정</pre>
+      </div>
+      <div class="data-box">
+        <h3>Train / Test Split</h3>
+        <pre>287개 윈도우 (시간 순서 유지)
+├─ 앞 229개: <span class="highlight">학습</span> (80%)
+│            모델이 정답 보고 배움
+└─ 뒤  58개: <span class="muted">시험</span> (20%)
+             처음 보는 데이터로 평가
+
+왜 랜덤 섞지 않나?
+→ 미래 데이터로 과거를 학습하는
+  data leakage 방지</pre>
+      </div>
+    </div>
+  </div>
+
+  <!-- Result -->
+  <div id="panel-result" style="display:none">
+    <h2>✅ 현재 결과</h2>
+    <p class="why"><strong>F1 0.70 이상 = 파이프라인 검증 성공.</strong> 세션 1개짜리 prototype이지만 "AirPods IMU로 씹기 감지 가능하다"는 게 데이터로 증명됨.</p>
+    <div class="metrics">
+      <div class="metric"><div class="val">0.79</div><div class="lbl">F1 (chewing)</div></div>
+      <div class="metric"><div class="val">0.74</div><div class="lbl">전체 정확도</div></div>
+      <div class="metric"><div class="val">287</div><div class="lbl">윈도우 수</div></div>
+      <div class="metric"><div class="val">1개</div><div class="lbl">학습 세션</div></div>
+    </div>
+    <div class="data-example" style="margin-top: 20px">
+      <div class="data-box">
+        <h3>Confusion Matrix (test set 58개)</h3>
+        <pre>              예측 rest  예측 chewing
+실제 rest         <span class="highlight">15</span>         <span class="muted">8</span>
+실제 chewing       <span class="muted">7</span>        <span class="highlight">28</span></pre>
+      </div>
+      <div class="data-box">
+        <h3>다음 목표</h3>
+        <pre>30세션+ 수집
+  → 동일 파이프라인 재실행
+  → 일반화 성능 측정
+
+Core ML 변환
+  → ChewingClassifier.mlmodel
+  → iOS 앱에 탑재
+
+실시간 추론
+  → 2초마다 predict
+  → 씹기 카운팅</pre>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<script>
+mermaid.initialize({ startOnLoad: true, theme: 'dark' });
+
+function show(id) {
+  document.querySelectorAll('[id^="panel-"]').forEach(p => p.style.display = 'none');
+  document.querySelectorAll('.stage').forEach(s => s.classList.remove('active'));
+  document.getElementById('panel-' + id).style.display = 'block';
+  document.getElementById('btn-' + id).classList.add('active');
+}
+</script>
+</body>
+</html>
