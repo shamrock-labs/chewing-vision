@@ -1,108 +1,197 @@
 # chewing-vision
 
-## Overview
+비디오에서 씹기 신호를 추출하고 Firebase Storage 세션을 관리하는 CLI 도구입니다.  
+AirPods IMU 씹기 GT 워크플로의 weak-label 생성기로 설계되었습니다.
 
-`chewing-vision` is a local CLI and Python package that turns a video of eating into chewing signals, event labels, window labels, bout summaries, plots, and a demo overlay MP4. It is designed as a weak-label generator for AirPods IMU ground-truth workflows, not as a medical or nutrition product.
-
-## Installation
-
-Use the project virtualenv and avoid system Python:
+## 설치 (팀원용)
 
 ```bash
-cd /Users/bohyeong/Desktop/공부/project/soma/chewing-vision
-.venv/bin/pip install -e ".[dev]"
+git clone <repo-url>
+cd chewing-vision
+bash setup.sh
 ```
 
-The package requires Python 3.10+, MediaPipe, OpenCV, SciPy, Matplotlib, pandas, Pillow, and `orofacIAnalysis==0.1.2`.
+`setup.sh`가 자동으로 처리합니다:
+- Python 3.10+ 확인
+- `.venv` 가상환경 생성
+- 패키지 및 Firebase 의존성 설치
+- `chewing-vision` 전역 명령어 등록 (`/usr/local/bin`)
+- `.env` 템플릿 생성
 
-## Quickstart
+### Firebase 설정
+
+Firebase fetch 기능을 사용하려면 `.env`에 서비스 계정 JSON 경로를 설정하세요:
+
+```
+CHEWING_FIREBASE_CREDENTIALS=path/to/serviceaccount.json
+```
+
+서비스 계정 키 발급: Firebase Console → Project Settings → Service Accounts → Generate new private key
+
+---
+
+## 사용법
+
+### 인터랙티브 메뉴
 
 ```bash
-.venv/bin/chewing demo tests/fixtures/sample_chewing_1.mp4 -o /tmp/cv_demo_out/
+chewing-vision
 ```
 
-Expected console shape:
+화살표 키로 커맨드를 선택하면 필요한 옵션을 순서대로 입력할 수 있습니다.
 
-```text
-engine  duration_s  n_chews  chews/min  face_rate  warnings
-------  ----------  -------  ---------  ---------  --------
-ours    91.03       85       56.0       1.00       0
-orofac  91.07       95       62.6       N/A        2
-demo outputs written to /tmp/cv_demo_out/
-```
-
-## CLI Reference
+### CLI 직접 실행
 
 ```bash
-.venv/bin/chewing analyze VIDEO.mp4 --engine ours|orofac|both -o out/
+chewing-vision <command> [options]
+chewing-vision <command> --help
 ```
 
-Writes frame signals, window labels, events, bouts, and `summary.json`.
+---
+
+## 커맨드 레퍼런스
+
+### `analyze` — 씹기 분석
+
+비디오에서 씹기 이벤트를 감지하고 CSV/JSON을 출력합니다.
 
 ```bash
-.venv/bin/chewing plot VIDEO.mp4 --engine ours -o signals.png
+chewing-vision analyze VIDEO.mp4 --engine ours|orofac|both -o out/
 ```
 
-Writes a two-panel MAR/jawOpen PNG with peak markers and chewing windows.
+출력: `frame_signals_{engine}.csv`, `labels_{engine}.csv`, `events_{engine}.csv`, `bouts_{engine}.csv`, `summary.json`
+
+### `plot` — 신호 시각화
+
+MAR / jaw_open 시계열 그래프 PNG를 생성합니다.
 
 ```bash
-.venv/bin/chewing overlay VIDEO.mp4 --engine ours -o demo.mp4
+chewing-vision plot VIDEO.mp4 --engine ours -o signals.png
 ```
 
-Writes a 1600x840 demo MP4 with video, sidebar, rolling signal trace, and peak markers.
+### `overlay` — 오버레이 렌더링
+
+씹기 감지 결과를 원본 비디오에 오버레이한 MP4를 생성합니다.
 
 ```bash
-.venv/bin/chewing eval --auto AUTO_LABELS.csv --human HUMAN_LABELS.csv
+chewing-vision overlay VIDEO.mp4 --engine ours -o demo.mp4
 ```
 
-Compares window labels and prints JSON metrics. Optional event inputs:
+### `eval` — 라벨 평가
+
+자동 라벨 CSV와 수동 라벨 CSV를 비교해 precision · recall · F1을 출력합니다.
 
 ```bash
-.venv/bin/chewing eval --auto AUTO.csv --human HUMAN.csv --auto-events AUTO_EVENTS.csv --human-events HUMAN_EVENTS.csv
+chewing-vision eval --auto AUTO_LABELS.csv --human HUMAN_LABELS.csv
+# 이벤트 레벨 비교 포함
+chewing-vision eval --auto AUTO.csv --human HUMAN.csv \
+  --auto-events AUTO_EVENTS.csv --human-events HUMAN_EVENTS.csv
 ```
+
+### `compare` — 엔진 비교
+
+두 엔진(ours / orofac)이 출력한 CSV를 교차 비교해 agreement 점수를 산출합니다.
 
 ```bash
-.venv/bin/chewing compare --a LABELS_A.csv --b LABELS_B.csv
+chewing-vision compare --a LABELS_A.csv --b LABELS_B.csv
 ```
 
-Compares two label CSVs and prints cross-engine agreement metrics.
+### `demo` — 풀 파이프라인
+
+analyze + plot + overlay를 한 번에 실행합니다.
 
 ```bash
-.venv/bin/chewing demo VIDEO.mp4 -o out/
+chewing-vision demo VIDEO.mp4 -o out/
 ```
 
-Runs analyze with both engines, writes `signals.png`, renders `demo.mp4`, and prints a summary table.
+### `fetch` — Firebase 세션 다운로드
 
-## Output Schemas
+Firebase Storage에서 IMU/비디오 세션을 조회하고 다운로드합니다.
 
-`frame_signals_{engine}.csv`:
+```bash
+# 세션 목록 보기
+chewing-vision fetch --list
 
-```text
+# 특정 세션 다운로드
+chewing-vision fetch SESSION_ID -o ./sessions
+
+# 모든 세션 다운로드
+chewing-vision fetch --all -o ./sessions
+```
+
+---
+
+## 출력 스키마
+
+`frame_signals_{engine}.csv`
+```
 t_sec,frame_index,face_found,mar,jaw_open,chin_y,head_motion,quality
 ```
 
-`labels_{engine}.csv`:
-
-```text
+`labels_{engine}.csv`
+```
 t_start,t_end,label,confidence,quality,n_events,engine,mar_mean,jaw_open_mean
 ```
 
-`events_{engine}.csv`:
-
-```text
+`events_{engine}.csv`
+```
 t_sec,frame_index,signal,value,confidence,engine,side
 ```
 
-`bouts_{engine}.csv`:
-
-```text
+`bouts_{engine}.csv`
+```
 t_start,t_end,n_events,chews_per_min,confidence,engine
 ```
 
-`summary.json` contains the analyzed video metadata, per-engine counts, quality/warnings, and agreement metrics. See `SPEC.md` §7 for the canonical schema.
+`summary.json` — 비디오 메타데이터, 엔진별 카운트, 품질/경고, agreement 메트릭 포함. 상세 스키마는 `SPEC.md` §7 참조.
 
-## License + Attribution
+---
 
-This project is MIT licensed. See `LICENSE`.
+## 라이선스
 
-Uses orofacIAnalysis (MIT) by Cameron Maloney — see ATTRIBUTION.md.
+MIT. 자세한 내용은 `LICENSE` 참조.  
+orofacIAnalysis (MIT, Cameron Maloney) 사용 — `ATTRIBUTION.md` 참조.
+
+### `loso` — LOSO 교차 검증
+
+`sessions/` 디렉토리를 자동 탐색해 Leave-One-Session-Out CV를 실행하고 PNG + HTML 리포트를 생성합니다.
+
+```bash
+# 기본값 (--sessions-dir ./sessions, -o ml/outputs)
+chewing-vision loso
+
+# 경로 직접 지정
+chewing-vision loso --sessions-dir /path/to/sessions -o ml/outputs
+```
+
+각 세션 디렉토리에 다음 세 파일이 있어야 탐색 대상이 됩니다:
+- `imu*.csv` — IMU 데이터 (fetch로 다운로드)
+- `session*.json` — 세션 메타데이터 (fetch로 다운로드)
+- `labels_ours.csv` — 씹기 라벨 (analyze로 생성)
+
+실행할 때마다 타임스탬프 폴더가 생성되어 히스토리를 추적할 수 있습니다:
+```
+ml/outputs/
+├── 20260515T113400/
+│   ├── session_comparison.png
+│   └── session_comparison.html
+├── 20260516T093000/
+│   └── ...
+└── latest -> 20260516T093000   # 항상 최신 결과 가리킴
+```
+
+---
+
+## 전체 파이프라인 (Firebase → LOSO)
+
+```bash
+# 1. Firebase에서 세션 다운로드
+chewing-vision fetch --all -o ./sessions
+
+# 2. 각 세션 비디오 분석 (라벨 생성)
+#    인터랙티브 메뉴에서 analyze 선택 시 출력 경로가 자동으로 세션 폴더로 설정됨
+chewing-vision analyze ./sessions/{session_id}/video.mp4 -o ./sessions/{session_id}/
+
+# 3. LOSO CV 실행
+chewing-vision loso
+```

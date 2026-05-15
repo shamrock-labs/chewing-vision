@@ -28,3 +28,12 @@ progress.txt.bak
 .DS_Store
 .idea/
 .vscode/
+
+# Firebase service account keys — never commit
+*-adminsdk-*.json
+
+# Local env
+.env
+
+# Downloaded sessions (IMU + video, fetched from Firebase)
+sessions/
