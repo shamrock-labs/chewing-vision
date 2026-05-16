@@ -1,10 +1,10 @@
-"""AirPods IMU 씹기 감지 Random Forest — 전 세션 학습 + CoreML 내보내기.
+"""AirPods IMU 씹기 감지 Random Forest baseline.
 
-평가는 ml/compare_sessions.py의 LOSO CV가 담당.
-이 스크립트는 4세션 전체로 최종 모델을 학습한다.
+sessions/ 디렉토리를 자동 탐색해 IMU + labels_ours.csv가 모두 있는
+세션을 전부 학습에 사용한다. 평가는 ml/compare_sessions.py의 LOSO CV가 담당.
 
 사용법:
-    cd /Users/bohyeong/Desktop/공부/project/soma/chewing-vision
+    cd chewing-vision
     .venv/bin/python ml/pipeline.py
 """
 
@@ -19,43 +19,63 @@ from sklearn.ensemble import RandomForestClassifier
 
 from utils import FEATURE_NAMES, load_labels, load_session, make_windows_with_times
 
-# ── 경로 ──────────────────────────────────────────────────────────────────────
-DATA_DIR = Path("/Users/bohyeong/Desktop/공부/project/soma/chewing_collector_data")
-OUT_DIR  = Path(__file__).parent / "outputs"
+WORKTREE_ROOT = Path(__file__).resolve().parents[1]
+MAIN_REPO_ROOT = Path(__file__).resolve().parents[4]
+SESSIONS_DIR = MAIN_REPO_ROOT / "sessions"
+OUT_DIR      = Path(__file__).parent / "outputs"
 OUT_DIR.mkdir(exist_ok=True)
 
-SESSIONS = [
-    {"id": "20260513T145413_a61a4c", "labels_path": "/tmp/chewing_a61a4c/labels_ours.csv"},
-    {"id": "20260513T145034_838cje",  "labels_path": "/tmp/chewing_838cje/labels_ours.csv"},
-    {"id": "20260513T161848_uj2e92",  "labels_path": "/tmp/chewing_uj2e92/labels_ours.csv"},
-    {"id": "20260514T115953_n1xetu",  "labels_path": "/tmp/chewing_n1xetu/labels_ours.csv"},
-]
+
+def _discover_sessions() -> list[dict]:
+    sessions = []
+    for sdir in sorted(SESSIONS_DIR.iterdir()):
+        if not sdir.is_dir():
+            continue
+        imu_files     = sorted(sdir.glob("imu_*.csv"))
+        session_files = sorted(sdir.glob("session_*.json"))
+        labels_path   = sdir / "labels_ours.csv"
+        if imu_files and session_files and labels_path.exists():
+            sessions.append({
+                "id":           sdir.name,
+                "imu_path":     str(imu_files[0]),
+                "session_path": str(session_files[0]),
+                "labels_path":  str(labels_path),
+            })
+    return sessions
 
 
 def main() -> None:
+    sessions = _discover_sessions()
+    if not sessions:
+        print(f"[pipeline] No valid sessions found in {SESSIONS_DIR}")
+        return
+    print(f"[pipeline] Found {len(sessions)} sessions: {[s['id'] for s in sessions]}")
+
     # 1. 전 세션 데이터 로드 + concat
     print("▶ 데이터 로드 중...")
     all_X, all_y = [], []
-    for sess in SESSIONS:
-        imu_path     = DATA_DIR / "sessions" / sess["id"] / "imu.csv"
-        session_path = DATA_DIR / "sessions" / sess["id"] / "session.json"
-        imu, _  = load_session(str(imu_path), str(session_path))
-        labels  = load_labels(sess["labels_path"])
+    for sess in sessions:
+        imu, _ = load_session(sess["imu_path"], sess["session_path"])
+        labels = load_labels(sess["labels_path"])
         X, y, _ = make_windows_with_times(imu, labels)
         if len(X) > 0:
             all_X.append(X)
             all_y.append(y)
             print(f"  {sess['id']}: {len(X)} windows (chewing={y.sum()}, rest={(y==0).sum()})")
 
+    if not all_X:
+        print("[pipeline] No windows produced.")
+        return
+
     X = np.vstack(all_X)
     y = np.concatenate(all_y)
     print(f"  총 윈도우: {len(X)}  (chewing={y.sum()}, rest={(y==0).sum()})")
 
-    # 2. 전체 학습 (holdout 없음 — 평가는 LOSO compare_sessions.py 가 담당)
+    # 2. 전체 데이터로 학습 (holdout 없음 — 평가는 LOSO compare_sessions.py 가 담당)
     print("▶ Random Forest 학습 중 (n_estimators=100)...")
     clf = RandomForestClassifier(n_estimators=100, random_state=42, n_jobs=-1)
     clf.fit(X, y)
-    print(f"  Trained on {len(y)} windows, chewing ratio: {y.mean():.1%}")
+    print(f"  Trained on {len(X)} windows, chewing ratio: {y.mean()*100:.1f}%")
 
     # 3. Feature importance
     importances = clf.feature_importances_
@@ -64,12 +84,12 @@ def main() -> None:
     for i in top5:
         print(f"  {FEATURE_NAMES[i]}: {importances[i]:.3f}")
 
-    # 4. 모델 저장 (joblib)
+    # 4. 모델 저장
     model_path = OUT_DIR / "model_rf.joblib"
     joblib.dump(clf, model_path)
     print(f"\n▶ 모델 저장: {model_path}")
 
-    # 5. Core ML 변환 (sklearn 1.6+ 버전 게이트 우회 패치)
+    # 5. Core ML 변환
     try:
         import coremltools as ct
         import coremltools._deps as _ct_deps
@@ -89,7 +109,7 @@ def main() -> None:
         )
         from coremltools.models import MLModel
         coreml = MLModel(coreml_spec)
-        coreml.short_description = "AirPods IMU 씹기 감지 (Random Forest, 4-session LOSO)"
+        coreml.short_description = "AirPods IMU 씹기 감지 (Random Forest, composite w=0.3)"
         coreml_path = str(OUT_DIR / "ChewingClassifier.mlmodel")
         coreml.save(coreml_path)
         print(f"▶ Core ML 저장: {coreml_path}")
