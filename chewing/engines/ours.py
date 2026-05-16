@@ -125,15 +125,25 @@ def _build_windows(
 class OursEngine(EngineBase):
     """In-house chewing detector built on MediaPipe Face Landmarker.
 
-    n_chews semantics: count of jaw_open peaks only (primary signal, SPEC §8.6).
-    MAR peaks are stored in Result.events with source_signal='mar' for inspection
-    but never contribute to n_chews — avoids double counting on signals that
-    typically co-fire.
+    signal_mode controls which signal drives peak detection and window labeling:
+      "jaw_open"  — original behaviour (jaw_open primary, mar stored only)
+      "mar"       — MAR primary
+      "composite" — weighted sum: mar_weight*MAR + (1-mar_weight)*jaw_open
     """
+
+    def __init__(
+        self,
+        signal_mode: str = "jaw_open",
+        mar_weight: float = 0.7,
+    ) -> None:
+        assert signal_mode in ("jaw_open", "mar", "composite"), f"Unknown signal_mode: {signal_mode}"
+        self.signal_mode = signal_mode
+        self.mar_weight = mar_weight
 
     @property
     def engine_name(self) -> str:
-        return "ours"
+        suffix = "" if self.signal_mode == "jaw_open" else f"_{self.signal_mode}"
+        return f"ours{suffix}"
 
     def analyze(
         self,
@@ -253,33 +263,59 @@ class OursEngine(EngineBase):
         jaw_smoothed = apply_smoothing(_interp_nan(jaw_array), "default", fps=fps)
         mar_smoothed = apply_smoothing(_interp_nan(mar_array), "default", fps=fps)
 
-        jaw_peaks = find_chew_peaks(jaw_smoothed, fps)
-        mar_peaks = find_chew_peaks(mar_smoothed, fps)
+        def _norm(sig: np.ndarray) -> np.ndarray:
+            lo, hi = sig.min(), sig.max()
+            return (sig - lo) / (hi - lo + 1e-9)
+
+        if self.signal_mode == "composite":
+            primary = self.mar_weight * _norm(mar_smoothed) + (1 - self.mar_weight) * _norm(jaw_smoothed)
+            primary_label = "composite"
+        elif self.signal_mode == "mar":
+            primary = mar_smoothed
+            primary_label = "mar"
+        else:
+            primary = jaw_smoothed
+            primary_label = "jaw_open"
+
+        primary_peaks = find_chew_peaks(primary, fps)
+
+        # always compute both for storage
+        jaw_peaks = find_chew_peaks(jaw_smoothed, fps) if primary_label != "jaw_open" else primary_peaks
+        mar_peaks = find_chew_peaks(mar_smoothed, fps) if primary_label != "mar" else primary_peaks
 
         events: List[ChewEvent] = []
-        for i in jaw_peaks:
+        for i in primary_peaks:
             events.append(
                 ChewEvent(
+                    t_sec=float(frames[i].t_sec),
+                    signal_value=float(primary[i]),
+                    source_signal=primary_label,
+                    frame_index=int(frames[i].frame_index),
+                )
+            )
+        # store secondary signals for inspection (not counted)
+        if primary_label != "jaw_open":
+            for i in jaw_peaks:
+                events.append(ChewEvent(
                     t_sec=float(frames[i].t_sec),
                     signal_value=float(jaw_smoothed[i]),
                     source_signal="jaw_open",
                     frame_index=int(frames[i].frame_index),
-                )
-            )
-        for i in mar_peaks:
-            events.append(
-                ChewEvent(
+                ))
+        if primary_label != "mar":
+            for i in mar_peaks:
+                events.append(ChewEvent(
                     t_sec=float(frames[i].t_sec),
                     signal_value=float(mar_smoothed[i]),
                     source_signal="mar",
                     frame_index=int(frames[i].frame_index),
-                )
-            )
+                ))
         events.sort(key=lambda e: e.t_sec)
 
-        windows = _build_windows(frames, events)
-        bouts = segment_bouts([e for e in events if e.source_signal == "jaw_open"])
-        n_chews = int(len(jaw_peaks))
+        primary_events = [e for e in events if e.source_signal == primary_label]
+        windows = _build_windows(frames, primary_events)
+        bouts = segment_bouts(primary_events)
+        n_chews = int(len(primary_peaks))
 
         return Result(
             engine_name=self.engine_name,

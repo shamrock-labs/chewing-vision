@@ -484,7 +484,7 @@ def main(sessions_dir: Path | None = None, output_dir: Path | None = None) -> No
 
     for train_idx, test_idx in logo.split(X_all, y_all, groups):
         held_out = groups[test_idx[0]]
-        clf = RandomForestClassifier(n_estimators=20, random_state=42)
+        clf = RandomForestClassifier(n_estimators=20, class_weight='balanced', random_state=42)
         clf.fit(X_all[train_idx], y_all[train_idx])
         y_pred = clf.predict(X_all[test_idx])
 

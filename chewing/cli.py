@@ -931,9 +931,7 @@ def _cmd_loso(args: argparse.Namespace) -> int:
         f"  [dim]{escape(str(sessions_dir))}[/dim]"
         f"  →  [dim]{escape(str(output_dir))}[/dim]\n"
     )
-    with console.status("  [cyan]Running LOSO cross-validation…[/cyan]", spinner="dots"):
-        _loso_main(sessions_dir=sessions_dir, output_dir=output_dir)
-
+    _loso_main(sessions_dir=sessions_dir, output_dir=output_dir)
     console.print(
         f"\n  [green]✓[/green]  Report saved  [dim]{escape(str(output_dir))}[/dim]\n"
     )

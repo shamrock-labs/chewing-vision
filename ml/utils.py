@@ -11,6 +11,8 @@ IMU_AXES = [
     "user_accel_x", "user_accel_y", "user_accel_z",
 ]
 
+ATTITUDE_AXES = ["attitude_pitch", "attitude_yaw", "attitude_roll"]
+
 
 def load_session(imu_path: str, session_json_path: str) -> tuple[pd.DataFrame, float]:
     """IMU CSV와 session.json을 읽고 (imu_df, video_start_sec) 반환.
@@ -85,13 +87,19 @@ def make_windows_with_times(imu: pd.DataFrame, labels: pd.DataFrame,
 
 
 def extract_features(window: pd.DataFrame) -> list[float]:
-    """12-dim feature vector: RMS + std for 6 IMU axes."""
+    """15-dim feature vector: RMS+std for 6 IMU axes + delta_RMS for 3 attitude axes."""
     features = []
     for axis in IMU_AXES:
         vals = window[axis].values
         features.append(float(np.sqrt(np.mean(vals ** 2))))
         features.append(float(np.std(vals)))
+    for axis in ATTITUDE_AXES:
+        deltas = np.diff(window[axis].values)
+        features.append(float(np.sqrt(np.mean(deltas ** 2))) if len(deltas) > 0 else 0.0)
     return features
 
 
-FEATURE_NAMES = [f"{axis}_{stat}" for axis in IMU_AXES for stat in ("rms", "std")]
+FEATURE_NAMES = (
+    [f"{axis}_{stat}" for axis in IMU_AXES for stat in ("rms", "std")]
+    + [f"{axis}_delta_rms" for axis in ATTITUDE_AXES]
+)
