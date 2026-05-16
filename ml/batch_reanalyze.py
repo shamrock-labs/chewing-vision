@@ -17,7 +17,7 @@ from chewing.engines.ours import OursEngine
 from chewing.labels import write_window_csv
 
 SESSIONS_DIR = MAIN_REPO_ROOT / "sessions"
-MAR_WEIGHT = 0.7
+MAR_WEIGHT = 0.3
 ENGINE = OursEngine(signal_mode="composite", mar_weight=MAR_WEIGHT)
 
 
