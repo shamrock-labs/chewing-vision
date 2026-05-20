@@ -18,7 +18,7 @@ function parseSignalCsv(text: string): SignalPoint[] {
       const cols = line.split(',')
       return { t: parseFloat(cols[ti]), jaw_open: parseFloat(cols[ji]), mar: parseFloat(cols[mi]) }
     })
-    .filter(p => !isNaN(p.t))
+    .filter(p => Number.isFinite(p.t) && Number.isFinite(p.jaw_open) && Number.isFinite(p.mar))
 }
 
 function parseImuCsv(text: string): ImuPoint[] {

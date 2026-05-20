@@ -13,9 +13,11 @@ interface Props {
 }
 
 function normalize(arr: number[]): number[] {
-  const lo = Math.min(...arr), hi = Math.max(...arr)
+  const finite = arr.filter(Number.isFinite)
+  if (finite.length === 0) return arr.map(() => 0)
+  const lo = Math.min(...finite), hi = Math.max(...finite)
   if (hi === lo) return arr.map(() => 0)
-  return arr.map(v => (v - lo) / (hi - lo))
+  return arr.map(v => Number.isFinite(v) ? (v - lo) / (hi - lo) : 0)
 }
 
 function downsample(pts: SignalPoint[], n = 3): SignalPoint[] {
