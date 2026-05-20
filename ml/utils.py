@@ -54,19 +54,38 @@ def assign_label(t_start: float, t_end: float, labels: pd.DataFrame,
     return 1 if chewing_count / len(overlap) >= chewing_threshold else 0
 
 
+def _transition_times(labels: pd.DataFrame) -> np.ndarray:
+    """레이블이 바뀌는 시각 목록 반환 (chewing↔rest 경계)."""
+    if len(labels) < 2:
+        return np.array([])
+    sorted_labels = labels.sort_values("t_start").reset_index(drop=True)
+    transitions = []
+    for i in range(1, len(sorted_labels)):
+        if sorted_labels.loc[i, "label"] != sorted_labels.loc[i - 1, "label"]:
+            transitions.append(float(sorted_labels.loc[i, "t_start"]))
+    return np.array(transitions)
+
+
 def make_windows(imu: pd.DataFrame, labels: pd.DataFrame,
-                 window_sec: float = 2.0, stride_sec: float = 0.5) -> tuple[np.ndarray, np.ndarray]:
+                 window_sec: float = 2.0, stride_sec: float = 0.5,
+                 boundary_sec: float = 1.0) -> tuple[np.ndarray, np.ndarray]:
     """슬라이딩 윈도우로 feature matrix X와 label vector y 생성."""
-    X, y, _ = make_windows_with_times(imu, labels, window_sec, stride_sec)
+    X, y, _ = make_windows_with_times(imu, labels, window_sec, stride_sec, boundary_sec)
     return X, y
 
 
 def make_windows_with_times(imu: pd.DataFrame, labels: pd.DataFrame,
-                             window_sec: float = 2.0, stride_sec: float = 0.5
+                             window_sec: float = 2.0, stride_sec: float = 0.5,
+                             boundary_sec: float = 1.0,
                              ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """슬라이딩 윈도우로 feature matrix X, label vector y, t_start 배열 생성."""
+    """슬라이딩 윈도우로 feature matrix X, label vector y, t_start 배열 생성.
+
+    boundary_sec: 레이블 전환점 앞뒤로 이 범위 안에 걸치는 윈도우는 학습에서 제외.
+    경계 오염(boundary contamination)을 막아 clean 샘플만 남긴다.
+    """
     t_min = imu["t_vision"].min()
     t_max = imu["t_vision"].max() - window_sec
+    transitions = _transition_times(labels)
 
     X, y, t_starts = [], [], []
     t = t_min
@@ -75,6 +94,15 @@ def make_windows_with_times(imu: pd.DataFrame, labels: pd.DataFrame,
         if len(window) < 5:
             t += stride_sec
             continue
+
+        # 전환점에서 boundary_sec 이내 윈도우 제외
+        if len(transitions) > 0:
+            near = np.any(
+                (transitions > t - boundary_sec) & (transitions < t + window_sec + boundary_sec)
+            )
+            if near:
+                t += stride_sec
+                continue
 
         features = extract_features(window)
         label = assign_label(t, t + window_sec, labels)
@@ -94,8 +122,14 @@ def extract_features(window: pd.DataFrame) -> list[float]:
         features.append(float(np.sqrt(np.mean(vals ** 2))))
         features.append(float(np.std(vals)))
     for axis in ATTITUDE_AXES:
-        deltas = np.diff(window[axis].values)
-        features.append(float(np.sqrt(np.mean(deltas ** 2))) if len(deltas) > 0 else 0.0)
+        vals = window[axis].values
+        if len(vals) > 1:
+            raw = np.diff(vals)
+            # angle-aware: wrap to [-π, π] to handle yaw discontinuities at ±π
+            diffs = np.arctan2(np.sin(raw), np.cos(raw))
+            features.append(float(np.sqrt(np.mean(diffs ** 2))))
+        else:
+            features.append(0.0)
     return features
 
 
