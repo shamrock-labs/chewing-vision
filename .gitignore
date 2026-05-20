@@ -37,3 +37,29 @@ progress.txt.bak
 
 # Downloaded sessions (IMU + video, fetched from Firebase)
 sessions/
+
+# InsForge & AI agent skills
+.insforge
+.agent
+.agents
+.augment
+.claude
+.cline
+.github/copilot*
+.kilocode
+.qoder
+.qwen
+.roo
+.trae
+.windsurf
+
+# CoreML export venv (large, derived from setup_cml_env.sh)
+cml_env/
+
+# Web app build artifacts
+web/node_modules/
+web/dist/
+
+# ML derived artifacts
+ml/models/
+ml/outputs/
