@@ -105,6 +105,10 @@ export default function Annotate() {
         ? updatedRows.filter(w => w.jaw_open_label !== w.composite_label)
         : updatedRows
       setWindows(filtered)
+      if (filtered.length === 0) {
+        setIdx(0)
+        return
+      }
       if (windowParam) {
         const targetId = Number(windowParam)
         const ti = filtered.findIndex(w => w.id === targetId)
@@ -227,7 +231,7 @@ export default function Annotate() {
           {/* Top info bar */}
           <div className="flex items-center gap-4 px-4 py-2 shrink-0 border-b" style={{ background: 'var(--surface)', borderColor: 'var(--border)' }}>
             <span className="text-sm font-mono" style={{ color: 'var(--text)' }}>
-              Window {idx + 1} / {windows.length}
+              Window {windows.length ? idx + 1 : 0} / {windows.length}
             </span>
             {win && (
               <span className="text-sm" style={{ color: 'var(--muted)' }}>
@@ -251,6 +255,13 @@ export default function Annotate() {
             {win && (
               <div className="absolute left-0 top-0 bottom-0 w-1.5"
                 style={{ background: labelColor(win.human_label) }} />
+            )}
+            {!win && (
+              <div className="text-sm text-center px-6" style={{ color: 'var(--muted)' }}>
+                {mode === 'disagree'
+                  ? '이 세션에는 jaw_open과 composite가 불일치한 윈도우가 없습니다.'
+                  : '표시할 윈도우가 없습니다.'}
+              </div>
             )}
           </div>
 

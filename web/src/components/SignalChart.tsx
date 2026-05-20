@@ -43,7 +43,7 @@ export default function SignalChart({ signals, windows, currentIdx, onWindowClic
   // Redraw highlight only when currentIdx changes (no chart recreation)
   useEffect(() => {
     idxRef.current = currentIdx
-    chartRef.current?.update('none')
+    if (canvasRef.current?.isConnected) chartRef.current?.update('none')
   }, [currentIdx])
 
   // Create chart only when signals change
@@ -138,7 +138,11 @@ export default function SignalChart({ signals, windows, currentIdx, onWindowClic
     const el = canvasRef.current
     const reset = () => chartRef.current?.resetZoom()
     el.addEventListener('dblclick', reset)
-    return () => { el.removeEventListener('dblclick', reset); chartRef.current?.destroy() }
+    return () => {
+      el.removeEventListener('dblclick', reset)
+      chartRef.current?.destroy()
+      chartRef.current = null
+    }
   }, [signals])   // eslint-disable-line react-hooks/exhaustive-deps
 
   return <canvas ref={canvasRef} style={{ width: '100%', height: '100%', cursor: 'crosshair' }} />

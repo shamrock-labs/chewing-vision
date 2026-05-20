@@ -23,7 +23,7 @@ export default function ImuChart({ imu, windows, currentIdx, onWindowClick }: Pr
   // Highlight update only — no chart recreation
   useEffect(() => {
     idxRef.current = currentIdx
-    chartRef.current?.update('none')
+    if (canvasRef.current?.isConnected) chartRef.current?.update('none')
   }, [currentIdx])
 
   // Create chart only when imu data changes
@@ -115,7 +115,11 @@ export default function ImuChart({ imu, windows, currentIdx, onWindowClick }: Pr
     const el = canvasRef.current
     const reset = () => chartRef.current?.resetZoom()
     el.addEventListener('dblclick', reset)
-    return () => { el.removeEventListener('dblclick', reset); chartRef.current?.destroy() }
+    return () => {
+      el.removeEventListener('dblclick', reset)
+      chartRef.current?.destroy()
+      chartRef.current = null
+    }
   }, [imu])   // eslint-disable-line react-hooks/exhaustive-deps
 
   return <canvas ref={canvasRef} style={{ width: '100%', height: '100%', cursor: 'crosshair' }} />
