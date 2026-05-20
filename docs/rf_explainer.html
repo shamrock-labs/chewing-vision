@@ -1,0 +1,1128 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<title>오도독 — 씹기 감지 기술 해설</title>
+<style>
+* { margin:0; padding:0; box-sizing:border-box; }
+:root {
+  --bg: #0f172a; --surface: #1e293b; --border: #334155;
+  --text: #e2e8f0; --muted: #64748b;
+  --blue: #3b82f6; --cyan: #22d3ee; --green: #4ade80;
+  --red: #f87171; --purple: #a78bfa; --yellow: #fbbf24;
+}
+html { scroll-behavior: smooth; }
+body { background:var(--bg); color:var(--text); font-family:-apple-system,'Apple SD Gothic Neo','Noto Sans KR',sans-serif; font-size:14px; line-height:1.6; }
+
+nav {
+  position:fixed; top:0; left:0; right:0; z-index:100;
+  background:rgba(15,23,42,.94); backdrop-filter:blur(12px);
+  border-bottom:1px solid var(--border);
+  display:flex; align-items:center; gap:4px;
+  padding:0 24px; height:52px; overflow-x:auto;
+}
+nav a { color:var(--muted); text-decoration:none; font-size:12px; font-weight:600; padding:6px 12px; border-radius:6px; white-space:nowrap; transition:color .15s,background .15s; }
+nav a:hover { color:var(--text); background:var(--surface); }
+nav .logo { color:var(--purple); font-weight:800; font-size:15px; margin-right:12px; white-space:nowrap; }
+
+section {
+  padding: 80px 40px 48px;
+  max-width:1100px; margin:0 auto;
+  scroll-margin-top: 52px;
+}
+.section-label { font-size:11px; font-weight:700; letter-spacing:2px; color:var(--muted); text-transform:uppercase; margin-bottom:10px; }
+h2 { font-size:28px; font-weight:800; letter-spacing:-.5px; margin-bottom:8px; }
+.desc { color:var(--muted); font-size:13px; margin-bottom:32px; max-width:600px; }
+.card { background:var(--surface); border:1px solid var(--border); border-radius:14px; padding:24px; }
+.row { display:flex; gap:20px; flex-wrap:wrap; }
+.col { flex:1; min-width:260px; }
+.divider { border:none; border-top:1px solid var(--border); margin:48px 0 0; }
+
+/* PIPELINE */
+.pipeline { display:flex; align-items:stretch; background:var(--surface); border:1px solid var(--border); border-radius:16px; overflow:hidden; }
+.pipe-step { flex:1; padding:28px 16px; text-align:center; border-right:1px solid var(--border); position:relative; }
+.pipe-step:last-child { border-right:none; }
+.pipe-icon { font-size:30px; margin-bottom:10px; }
+.pipe-title { font-size:12px; font-weight:700; margin-bottom:6px; }
+.pipe-sub { font-size:11px; color:var(--muted); line-height:1.5; }
+.pipe-arrow { position:absolute; right:-11px; top:50%; transform:translateY(-50%); width:22px; height:22px; background:var(--bg); border:1px solid var(--border); border-radius:50%; display:flex; align-items:center; justify-content:center; font-size:11px; color:var(--muted); z-index:2; }
+.pipe-step:last-child .pipe-arrow { display:none; }
+
+/* CANVAS */
+#win-canvas { width:100%; height:200px; border-radius:10px; background:var(--surface); border:1px solid var(--border); display:block; }
+.controls { display:flex; gap:10px; margin-top:14px; align-items:center; flex-wrap:wrap; }
+.btn { background:var(--blue); color:#fff; border:none; border-radius:8px; padding:7px 16px; font-size:12px; font-weight:600; cursor:pointer; transition:opacity .15s; }
+.btn:hover { opacity:.82; }
+.btn.stop { background:#334155; }
+.btn.outline { background:transparent; border:1px solid var(--border); color:var(--text); }
+
+/* FEATURE GRID */
+.feature-grid { display:grid; grid-template-columns:repeat(3,1fr); gap:10px; }
+.feat-card { background:var(--bg); border:1px solid var(--border); border-radius:10px; padding:14px; }
+.feat-card .tag { font-size:10px; font-weight:700; letter-spacing:1px; padding:2px 8px; border-radius:4px; margin-bottom:8px; display:inline-block; }
+.tag-rot { background:rgba(59,130,246,.2); color:var(--blue); }
+.tag-acc { background:rgba(74,222,128,.2); color:var(--green); }
+.tag-att { background:rgba(167,139,250,.2); color:var(--purple); }
+.feat-name { font-size:11px; font-weight:600; margin-bottom:4px; }
+.feat-desc { font-size:11px; color:var(--muted); }
+
+/* TREE */
+#tree-svg { width:100%; overflow:visible; }
+
+/* FOREST VOTING */
+.trees-row { display:flex; gap:8px; flex-wrap:wrap; margin-bottom:16px; }
+.tree-card { background:var(--bg); border:1px solid var(--border); border-radius:10px; padding:10px 14px; text-align:center; flex:1; min-width:100px; transition:border-color .3s,background .3s; }
+.tree-card.voted-chew { border-color:var(--green); background:rgba(74,222,128,.08); }
+.tree-card.voted-rest { border-color:var(--muted); background:rgba(100,116,139,.06); }
+.tree-num { font-size:10px; color:var(--muted); margin-bottom:5px; }
+.tree-vote { font-size:12px; font-weight:700; }
+.vote-bar { display:flex; border-radius:8px; overflow:hidden; height:34px; }
+.vote-bar-chew { background:var(--green); display:flex; align-items:center; justify-content:center; font-size:12px; font-weight:700; color:#0f172a; transition:width .6s; min-width:0; }
+.vote-bar-rest { background:var(--border); display:flex; align-items:center; justify-content:center; font-size:12px; font-weight:700; color:var(--text); transition:width .6s; min-width:0; }
+.verdict { margin-top:14px; font-size:20px; font-weight:800; text-align:center; }
+
+/* FEATURE IMPORTANCE */
+.fi-row { display:flex; align-items:flex-start; gap:10px; margin-bottom:14px; }
+.fi-label { font-size:11px; width:340px; flex-shrink:0; }
+.fi-bar-wrap { background:var(--bg); border-radius:4px; height:20px; overflow:hidden; }
+.fi-bar { height:100%; border-radius:4px; transition:width 1s ease; }
+.fi-val { font-size:11px; color:var(--muted); width:44px; flex-shrink:0; text-align:right; padding-top:2px; }
+
+/* LOSO */
+.loso-boxes { display:flex; gap:8px; flex-wrap:wrap; }
+.loso-box { flex:1; min-width:100px; border-radius:10px; padding:12px 8px; text-align:center; font-size:12px; font-weight:700; transition:all .35s; }
+.loso-box.train { background:rgba(59,130,246,.12); border:1px solid rgba(59,130,246,.3); color:var(--blue); }
+.loso-box.test  { background:rgba(251,191,36,.15); border:2px solid var(--yellow); color:var(--yellow); }
+.loso-box .sid  { font-size:10px; font-weight:400; color:inherit; opacity:.7; margin-top:4px; }
+.loso-results { display:flex; gap:10px; flex-wrap:wrap; margin-top:20px; }
+.loso-result-card { background:var(--bg); border:1px solid var(--border); border-radius:10px; padding:14px 16px; flex:1; min-width:120px; }
+.loso-result-card .sid { font-size:10px; color:var(--muted); margin-bottom:6px; }
+.loso-result-card .f1 { font-size:18px; font-weight:800; }
+
+/* SUMMARY */
+.summary-cards { display:flex; gap:14px; flex-wrap:wrap; }
+.sum-card { background:var(--surface); border:1px solid var(--border); border-radius:14px; padding:22px 24px; flex:1; min-width:160px; text-align:center; }
+.sum-card .val { font-size:34px; font-weight:800; letter-spacing:-1px; }
+.sum-card .lbl { font-size:12px; color:var(--muted); margin-top:6px; }
+
+/* CODE */
+.code { background:var(--bg); border:1px solid var(--border); border-radius:8px; padding:14px 16px; font-family:monospace; font-size:12px; line-height:1.75; color:#93c5fd; overflow-x:auto; margin-top:16px; }
+.kw { color:#f472b6; } .cm { color:#475569; } .nm { color:#fbbf24; } .st { color:#4ade80; }
+.chip { display:inline-block; font-size:10px; font-weight:700; padding:1px 8px; border-radius:20px; }
+.chip-new { background:rgba(167,139,250,.2); color:var(--purple); border:1px solid rgba(167,139,250,.3); }
+
+/* tree path highlight */
+.path-highlight { stroke: #f472b6 !important; stroke-width: 2.5 !important; }
+.path-node-highlight rect { stroke: #f472b6 !important; }
+
+/* version card collapse */
+.ver-card { cursor: pointer; transition: background .15s; }
+.ver-card .ver-header { display:flex; justify-content:space-between; align-items:center; gap:12px; flex-wrap:wrap; }
+.ver-card .ver-body { display:none; margin-top:12px; }
+.ver-card.open .ver-body { display:flex; gap:12px; flex-wrap:wrap; }
+.ver-card .chev { font-size:14px; color:var(--muted); transition:transform .25s; }
+.ver-card.open .chev { transform: rotate(180deg); }
+</style>
+</head>
+<body>
+
+<nav>
+  <span class="logo">🦷 오도독</span>
+  <a href="#s1">전체 흐름</a>
+  <a href="#s2">슬라이딩 윈도우</a>
+  <a href="#s3">피처 15개</a>
+  <a href="#s4">결정 나무</a>
+  <a href="#s5">랜덤 포레스트</a>
+  <a href="#s6">피처 중요도</a>
+  <a href="#s7">LOSO 검증</a>
+  <a href="#s8">최종 성능</a>
+  <a href="#s9">로드맵</a>
+  <a href="#s10">변경 이력</a>
+</nav>
+
+<!-- ═══════════════════════════════════════ -->
+<!-- 01. PIPELINE -->
+<!-- ═══════════════════════════════════════ -->
+<section id="s1">
+  <div class="section-label">01 · 전체 흐름</div>
+  <h2>에어팟 → AI → 씹기 감지</h2>
+  <p class="desc">에어팟 IMU 센서의 원시 데이터가 AI 예측까지 도달하는 5단계 파이프라인</p>
+
+  <div class="pipeline">
+    <div class="pipe-step">
+      <div class="pipe-icon">🎧</div>
+      <div class="pipe-title" style="color:var(--cyan)">IMU 센서</div>
+      <div class="pipe-sub">초당 50번<br>머리 움직임 측정<br><br>roll · pitch · yaw<br>rotation x/y/z<br>accel x/y/z</div>
+      <div class="pipe-arrow">›</div>
+    </div>
+    <div class="pipe-step">
+      <div class="pipe-icon">🪟</div>
+      <div class="pipe-title" style="color:var(--blue)">슬라이딩 윈도우</div>
+      <div class="pipe-sub">2초 구간 잘라냄<br>0.5초마다 슬라이딩<br><br>~100개 샘플<br>→ 분석 단위</div>
+      <div class="pipe-arrow">›</div>
+    </div>
+    <div class="pipe-step">
+      <div class="pipe-icon">🔢</div>
+      <div class="pipe-title" style="color:var(--purple)">피처 추출</div>
+      <div class="pipe-sub">100개 숫자<br>→ 15개 숫자로 압축<br><br>RMS · 표준편차<br>angle delta RMS</div>
+      <div class="pipe-arrow">›</div>
+    </div>
+    <div class="pipe-step">
+      <div class="pipe-icon">🌲</div>
+      <div class="pipe-title" style="color:var(--green)">랜덤 포레스트</div>
+      <div class="pipe-sub">나무 200그루<br>각자 독립 판정<br><br>다수결 투표<br>→ 최종 결과</div>
+      <div class="pipe-arrow">›</div>
+    </div>
+    <div class="pipe-step">
+      <div class="pipe-icon">✅</div>
+      <div class="pipe-title" style="color:var(--yellow)">예측 결과</div>
+      <div class="pipe-sub">씹는중 / 쉬는중<br>+ 확률값<br><br>0.5초마다<br>실시간 업데이트</div>
+    </div>
+  </div>
+
+  <div class="card" style="margin-top:24px">
+    <div style="font-size:12px;color:var(--muted);font-weight:600;margin-bottom:12px">학습과 서비스의 차이</div>
+    <div class="row">
+      <div class="col">
+        <div style="font-size:12px;font-weight:700;color:var(--blue);margin-bottom:6px">🎓 학습 단계 (Python · 오프라인)</div>
+        <div style="font-size:12px;color:var(--muted)">IMU CSV + 카메라 정답 라벨 → RandomForest 학습 → <span style="color:var(--text)">.mlmodel 파일 생성 (610KB)</span></div>
+        <div style="font-size:11px;color:var(--muted);margin-top:5px">카메라는 선생님 역할만. 서비스엔 필요 없음.</div>
+      </div>
+      <div class="col">
+        <div style="font-size:12px;font-weight:700;color:var(--green);margin-bottom:6px">📱 서비스 단계 (Swift · 실시간)</div>
+        <div style="font-size:12px;color:var(--muted)">에어팟 IMU → 15개 피처 → CoreML 추론 → 결과</div>
+        <div style="font-size:11px;color:var(--muted);margin-top:5px">카메라 없이 에어팟만으로 동작.</div>
+      </div>
+    </div>
+  </div>
+</section>
+<hr class="divider">
+
+<!-- ═══════════════════════════════════════ -->
+<!-- 02. SLIDING WINDOW -->
+<!-- ═══════════════════════════════════════ -->
+<section id="s2">
+  <div class="section-label">02 · 슬라이딩 윈도우</div>
+  <h2>2초씩 잘라서 0.5초마다 슬라이딩</h2>
+  <p class="desc">연속된 IMU 신호를 2초 단위로 잘라 피처를 계산하고, 0.5초씩 이동하며 반복한다.</p>
+
+  <canvas id="win-canvas"></canvas>
+  <div class="controls">
+    <button class="btn" onclick="startWindow()">▶ 시작</button>
+    <button class="btn stop" onclick="stopWindow()">■ 정지</button>
+    <span style="color:var(--muted);font-size:12px">파란 구간 = 현재 2초 윈도우 &nbsp;·&nbsp; 점선 = 0.5초 경계</span>
+  </div>
+
+  <div class="row" style="margin-top:20px">
+    <div class="col card">
+      <div style="font-size:12px;font-weight:700;color:var(--blue);margin-bottom:6px">윈도우 크기: 2초 (100샘플)</div>
+      <div style="font-size:12px;color:var(--muted)">씹기 한 번이 약 0.5~1초이므로, 2초 안에 2~4번의 씹기가 들어옴. 패턴을 보기 충분한 길이.</div>
+    </div>
+    <div class="col card">
+      <div style="font-size:12px;font-weight:700;color:var(--cyan);margin-bottom:6px">스트라이드: 0.5초 (25샘플)</div>
+      <div style="font-size:12px;color:var(--muted)">윈도우가 0.5초마다 한 번씩 예측을 냄. 앱이 0.5초 단위로 "씹는 중인가?" 를 판단.</div>
+    </div>
+    <div class="col card">
+      <div style="font-size:12px;font-weight:700;color:var(--muted);margin-bottom:6px">경계 오염 제거</div>
+      <div style="font-size:12px;color:var(--muted)">씹기↔쉬기 전환점 앞뒤 1초 이내 윈도우는 학습에서 제외. 라벨이 섞인 구간은 AI를 혼란시킴.</div>
+    </div>
+  </div>
+</section>
+<hr class="divider">
+
+<!-- ═══════════════════════════════════════ -->
+<!-- 03. FEATURES -->
+<!-- ═══════════════════════════════════════ -->
+<section id="s3">
+  <div class="section-label">03 · 피처 추출</div>
+  <h2>100개 샘플 → 15개 숫자</h2>
+  <p class="desc">2초 구간에서 통계값을 계산해 AI가 읽기 좋은 고정 크기 벡터로 변환한다.</p>
+
+  <div class="feature-grid">
+    <div class="feat-card"><span class="tag tag-rot">rotation x</span>
+      <div class="feat-name">rotation_x_rms · rotation_x_std</div>
+      <div class="feat-desc">좌우 회전 강도(RMS)와 들쭉날쭉함(표준편차)</div>
+    </div>
+    <div class="feat-card"><span class="tag tag-rot">rotation y</span>
+      <div class="feat-name">rotation_y_rms · rotation_y_std</div>
+      <div class="feat-desc">상하 끄덕임 강도와 들쭉날쭉함 <span style="color:var(--blue)">★ 3·7위</span></div>
+    </div>
+    <div class="feat-card"><span class="tag tag-rot">rotation z</span>
+      <div class="feat-name">rotation_z_rms · rotation_z_std</div>
+      <div class="feat-desc">앞뒤 기울기 강도와 들쭉날쭉함</div>
+    </div>
+    <div class="feat-card"><span class="tag tag-acc">accel x</span>
+      <div class="feat-name">user_accel_x_rms · user_accel_x_std</div>
+      <div class="feat-desc">좌우 가속도 강도와 들쭉날쭉함</div>
+    </div>
+    <div class="feat-card"><span class="tag tag-acc">accel y</span>
+      <div class="feat-name">user_accel_y_rms · user_accel_y_std</div>
+      <div class="feat-desc">앞뒤 가속도 강도와 들쭉날쭉함</div>
+    </div>
+    <div class="feat-card"><span class="tag tag-acc">accel z</span>
+      <div class="feat-name">user_accel_z_rms · user_accel_z_std</div>
+      <div class="feat-desc">상하 가속도 강도와 들쭉날쭉함 <span style="color:var(--yellow)">★ 1·2위</span></div>
+    </div>
+    <div class="feat-card"><span class="tag tag-att">attitude pitch</span>
+      <div class="feat-name">attitude_pitch_delta_rms <span class="chip chip-new">NEW</span></div>
+      <div class="feat-desc">끄덕임 각도의 샘플 간 잔떨림. 각도 불연속 보정 포함.</div>
+    </div>
+    <div class="feat-card"><span class="tag tag-att">attitude yaw</span>
+      <div class="feat-name">attitude_yaw_delta_rms <span class="chip chip-new">NEW</span></div>
+      <div class="feat-desc">좌우 돌림 잔떨림. yaw는 ±π 불연속 → atan2 보정 필수.</div>
+    </div>
+    <div class="feat-card"><span class="tag tag-att">attitude roll</span>
+      <div class="feat-name">attitude_roll_delta_rms <span class="chip chip-new">NEW</span></div>
+      <div class="feat-desc">기울기 잔떨림. 피처 중요도 전체 5위 (0.0947).</div>
+    </div>
+  </div>
+
+  <div class="code">
+<span class="cm"># utils.py — 실제 코드</span>
+<span class="kw">def</span> <span class="nm">extract_features</span>(window):
+    features = []
+    <span class="kw">for</span> axis <span class="kw">in</span> IMU_AXES:          <span class="cm"># rotation x/y/z, accel x/y/z → 12개</span>
+        vals = window[axis].values
+        features.append(np.sqrt(np.mean(vals**<span class="st">2</span>)))   <span class="cm"># RMS</span>
+        features.append(np.std(vals))                <span class="cm"># 표준편차</span>
+    <span class="kw">for</span> axis <span class="kw">in</span> ATTITUDE_AXES:      <span class="cm"># pitch, yaw, roll → 3개</span>
+        raw   = np.diff(window[axis].values)
+        diffs = np.arctan2(np.sin(raw), np.cos(raw)) <span class="cm"># ±π 래핑 보정</span>
+        features.append(np.sqrt(np.mean(diffs**<span class="st">2</span>)))  <span class="cm"># delta RMS</span>
+    <span class="kw">return</span> features  <span class="cm"># 총 15개</span>
+  </div>
+</section>
+<hr class="divider">
+
+<!-- ═══════════════════════════════════════ -->
+<!-- 04. DECISION TREE -->
+<!-- ═══════════════════════════════════════ -->
+<section id="s4">
+  <div class="section-label">04 · 결정 나무</div>
+  <h2>나무 1그루가 판단하는 방식</h2>
+  <p class="desc">실제 학습된 랜덤 포레스트에서 뽑은 첫 번째 나무 (깊이 4). 잎 노드를 클릭하면 루트부터 해당 판정까지의 경로가 표시됩니다.</p>
+
+  <div style="overflow-x:auto; background:var(--surface); border:1px solid var(--border); border-radius:14px; padding:20px;">
+    <svg id="tree-svg"></svg>
+  </div>
+
+  <div style="display:flex;gap:16px;align-items:center;flex-wrap:wrap;margin-top:16px">
+    <div style="display:flex;align-items:center;gap:6px;font-size:12px"><span style="width:13px;height:13px;background:rgba(59,130,246,.3);border:1px solid var(--blue);border-radius:3px;display:inline-block"></span>조건 노드</div>
+    <div style="display:flex;align-items:center;gap:6px;font-size:12px"><span style="width:13px;height:13px;background:rgba(74,222,128,.25);border:1px solid var(--green);border-radius:3px;display:inline-block"></span>씹는중</div>
+    <div style="display:flex;align-items:center;gap:6px;font-size:12px"><span style="width:13px;height:13px;background:rgba(100,116,139,.2);border:1px solid var(--muted);border-radius:3px;display:inline-block"></span>쉬는중</div>
+    <div style="font-size:12px;color:var(--muted)">잎 노드 클릭 → <span style="color:#f472b6;font-weight:700">경로 하이라이트</span></div>
+  </div>
+</section>
+<hr class="divider">
+
+<!-- ═══════════════════════════════════════ -->
+<!-- 05. FOREST VOTING -->
+<!-- ═══════════════════════════════════════ -->
+<section id="s5">
+  <div class="section-label">05 · 랜덤 포레스트</div>
+  <h2>나무 200그루의 다수결</h2>
+  <p class="desc">각 나무는 학습 시 서로 다른 샘플과 피처를 봤기 때문에, 각자 다른 기준으로 독립 판정한다.</p>
+
+  <div class="trees-row" id="trees-row"></div>
+  <div class="vote-bar" id="vote-bar" style="margin-bottom:12px">
+    <div class="vote-bar-chew" id="vote-chew" style="width:0%">씹는중</div>
+    <div class="vote-bar-rest" id="vote-rest" style="width:100%">쉬는중</div>
+  </div>
+  <div class="verdict" id="verdict" style="color:var(--muted)">—</div>
+
+  <div class="controls" style="margin-top:16px">
+    <button class="btn" onclick="runVoting()">▶ 투표 시뮬레이션</button>
+    <button class="btn outline" onclick="resetVoting()">초기화</button>
+    <span style="color:var(--muted);font-size:12px">나무 12개로 시뮬레이션 (실제는 200그루)</span>
+  </div>
+
+  <div class="code">
+<span class="cm"># save_loso_results.py · coreml_convert.py</span>
+clf = RandomForestClassifier(<span class="nm">n_estimators</span>=<span class="st">200</span>, random_state=<span class="st">42</span>)
+clf.fit(X_train, y_train)    <span class="cm"># 학습: 분기 기준값 탐색</span>
+y_pred = clf.predict(X_test) <span class="cm"># 예측: 200그루 투표 → 다수결</span>
+  </div>
+</section>
+<hr class="divider">
+
+<!-- ═══════════════════════════════════════ -->
+<!-- 06. FEATURE IMPORTANCE -->
+<!-- ═══════════════════════════════════════ -->
+<section id="s6">
+  <div class="section-label">06 · 피처 중요도</div>
+  <h2>어떤 신호가 판단에 가장 중요한가?</h2>
+  <p class="desc">200그루 나무가 얼마나 자주, 얼마나 효과적으로 각 피처를 사용했는지 집계. 15개 전체 표시.</p>
+
+  <div class="card" id="fi-chart"></div>
+
+  <div class="row" style="margin-top:18px">
+    <div class="col card">
+      <div style="font-size:12px;font-weight:700;color:var(--green);margin-bottom:6px">accel_z가 1·2위인 이유</div>
+      <div style="font-size:12px;color:var(--muted)">턱이 씹을 때 <strong style="color:var(--text)">위아래(z축)</strong>로 움직임. 귓속 에어팟도 같이 상하 진동 → 가장 직접적인 씹기 신호.</div>
+    </div>
+    <div class="col card">
+      <div style="font-size:12px;font-weight:700;color:var(--purple);margin-bottom:6px">attitude_roll이 5위인 이유</div>
+      <div style="font-size:12px;color:var(--muted)">씹는 리듬이 머리 기울기 각도에 잔진동으로 나타남. 자이로+가속도 융합 신호라 노이즈가 적음.</div>
+    </div>
+  </div>
+</section>
+<hr class="divider">
+
+<!-- ═══════════════════════════════════════ -->
+<!-- 07. LOSO -->
+<!-- ═══════════════════════════════════════ -->
+<section id="s7">
+  <div class="section-label">07 · LOSO 교차 검증</div>
+  <h2>처음 보는 사람도 잘 감지하는가?</h2>
+  <p class="desc">Leave-One-Session-Out — 세션 1개를 시험지로 빼고 나머지 6개로 학습. 7라운드 반복.</p>
+
+  <div class="card" style="margin-bottom:20px">
+    <div class="loso-boxes" id="loso-boxes"></div>
+    <div style="display:flex;gap:16px;margin-top:12px">
+      <div style="display:flex;align-items:center;gap:6px;font-size:12px"><span style="width:12px;height:12px;background:rgba(59,130,246,.25);border:1px solid rgba(59,130,246,.4);border-radius:2px;display:inline-block"></span>학습</div>
+      <div style="display:flex;align-items:center;gap:6px;font-size:12px"><span style="width:12px;height:12px;background:rgba(251,191,36,.2);border:2px solid var(--yellow);border-radius:2px;display:inline-block"></span>시험 (처음 보는 세션)</div>
+    </div>
+    <div class="controls" style="margin-top:16px">
+      <button class="btn" onclick="startLoso()">▶ 라운드 순서대로 보기</button>
+      <button class="btn stop" onclick="stopLoso()">■ 정지</button>
+      <span style="font-size:12px;color:var(--muted)" id="loso-label"></span>
+    </div>
+  </div>
+
+  <div class="loso-results" id="loso-results"></div>
+
+  <div class="code">
+<span class="kw">for</span> test_id <span class="kw">in</span> sessions:                        <span class="cm"># 7번 반복</span>
+    X_train = vstack(나머지 6개 세션 피처)
+    clf = RandomForestClassifier(n_estimators=<span class="st">100</span>)
+    clf.fit(X_train, y_train)
+    y_pred = clf.predict(X_test)  <span class="cm"># 처음 보는 세션으로 평가</span>
+  </div>
+</section>
+<hr class="divider">
+
+<!-- ═══════════════════════════════════════ -->
+<!-- 08. RESULT -->
+<!-- ═══════════════════════════════════════ -->
+<section id="s8">
+  <div class="section-label">08 · 최종 성능</div>
+  <h2>15-feature 모델 결과</h2>
+  <p class="desc">7개 세션 LOSO 풀링 결과. attitude delta_rms 3개 추가 후 F1-chew 0.809 → 0.823.</p>
+
+  <div class="summary-cards">
+    <div class="sum-card"><div class="val" style="color:var(--green)">82.1%</div><div class="lbl">F1-chew<br>씹는 구간 감지율</div></div>
+    <div class="sum-card"><div class="val" style="color:var(--blue)">71.9%</div><div class="lbl">F1-rest<br>쉬는 구간 정확도</div></div>
+    <div class="sum-card"><div class="val" style="color:var(--purple)">78.1%</div><div class="lbl">Pooled Accuracy</div></div>
+    <div class="sum-card"><div class="val" style="color:var(--yellow)">610KB</div><div class="lbl">모델 크기<br>CoreML .mlmodel</div></div>
+    <div class="sum-card"><div class="val" style="color:var(--cyan)">15</div><div class="lbl">피처 수<br>+3 attitude NEW</div></div>
+  </div>
+
+  <div class="card" style="margin-top:28px">
+    <div style="font-size:12px;font-weight:700;margin-bottom:14px">attitude 3개 추가 전후 비교</div>
+    <div style="display:flex;border-radius:10px;overflow:hidden;border:1px solid var(--border)">
+      <div style="flex:1;padding:20px;background:rgba(100,116,139,.08)">
+        <div style="font-size:11px;color:var(--muted);margin-bottom:8px">12-feature (이전)</div>
+        <div style="font-size:26px;font-weight:800;color:var(--muted)">0.809</div>
+        <div style="font-size:11px;color:var(--muted);margin-top:4px">F1-chew</div>
+      </div>
+      <div style="width:1px;background:var(--border)"></div>
+      <div style="flex:1;padding:20px;background:rgba(74,222,128,.06)">
+        <div style="font-size:11px;color:var(--green);margin-bottom:8px">15-feature (현재) <span class="chip chip-new">NEW</span></div>
+        <div style="font-size:26px;font-weight:800;color:var(--green)">0.823</div>
+        <div style="font-size:11px;color:var(--muted);margin-top:4px">F1-chew &nbsp;<span style="color:var(--green)">+0.014 ↑</span></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- CoreML 의미 설명 -->
+  <div class="card" style="margin-top:28px">
+    <div style="font-size:12px;font-weight:700;margin-bottom:16px">학습한 모델을 CoreML로 넣는다는 것의 의미</div>
+
+    <!-- 파이프라인 화살표 -->
+    <div style="display:flex;align-items:center;gap:0;flex-wrap:wrap;margin-bottom:24px">
+      <div style="background:var(--bg);border:1px solid var(--border);border-radius:10px;padding:12px 16px;text-align:center;min-width:130px">
+        <div style="font-size:20px;margin-bottom:4px">🐍</div>
+        <div style="font-size:11px;font-weight:700;color:var(--blue)">Python sklearn</div>
+        <div style="font-size:10px;color:var(--muted);margin-top:2px">RandomForest 객체<br>메모리에만 존재</div>
+      </div>
+      <div style="font-size:20px;color:var(--muted);padding:0 10px">→</div>
+      <div style="background:var(--bg);border:1px solid var(--border);border-radius:10px;padding:12px 16px;text-align:center;min-width:130px">
+        <div style="font-size:20px;margin-bottom:4px">🔧</div>
+        <div style="font-size:11px;font-weight:700;color:var(--purple)">coremltools</div>
+        <div style="font-size:10px;color:var(--muted);margin-top:2px">나무 구조·기준값<br>Apple 포맷으로 직렬화</div>
+      </div>
+      <div style="font-size:20px;color:var(--muted);padding:0 10px">→</div>
+      <div style="background:var(--bg);border:1px solid var(--border);border-radius:10px;padding:12px 16px;text-align:center;min-width:130px">
+        <div style="font-size:20px;margin-bottom:4px">📦</div>
+        <div style="font-size:11px;font-weight:700;color:var(--yellow)">.mlmodel 파일</div>
+        <div style="font-size:10px;color:var(--muted);margin-top:2px">610KB 바이너리<br>나무 200그루 내장</div>
+      </div>
+      <div style="font-size:20px;color:var(--muted);padding:0 10px">→</div>
+      <div style="background:var(--bg);border:1px solid var(--border);border-radius:10px;padding:12px 16px;text-align:center;min-width:130px">
+        <div style="font-size:20px;margin-bottom:4px">🛠</div>
+        <div style="font-size:11px;font-weight:700;color:var(--cyan)">Xcode 자동 생성</div>
+        <div style="font-size:10px;color:var(--muted);margin-top:2px">ChewingClassifier.swift<br>ChewingClassifierInput</div>
+      </div>
+      <div style="font-size:20px;color:var(--muted);padding:0 10px">→</div>
+      <div style="background:rgba(74,222,128,.08);border:1px solid var(--green);border-radius:10px;padding:12px 16px;text-align:center;min-width:130px">
+        <div style="font-size:20px;margin-bottom:4px">📱</div>
+        <div style="font-size:11px;font-weight:700;color:var(--green)">iPhone 실시간 추론</div>
+        <div style="font-size:10px;color:var(--muted);margin-top:2px">Python 없이 온디바이스<br>Apple Silicon 최적화</div>
+      </div>
+    </div>
+
+    <!-- 각 단계 설명 -->
+    <div class="row">
+      <div class="col" style="min-width:200px">
+        <div style="font-size:11px;font-weight:700;color:var(--purple);margin-bottom:6px">coremltools 변환이란?</div>
+        <div style="font-size:12px;color:var(--muted)">
+          sklearn의 RandomForest는 Python 객체로만 존재한다. <code style="color:var(--text);background:var(--bg);padding:1px 5px;border-radius:3px">coremltools</code>는 나무 200그루의 분기 조건(피처 이름, 기준값, 좌/우 자식)을 Apple의 <strong style="color:var(--text)">protobuf 포맷</strong>으로 직렬화해 .mlmodel 파일로 저장한다. Python 런타임 없이도 동일한 판단이 가능해진다.
+        </div>
+      </div>
+      <div class="col" style="min-width:200px">
+        <div style="font-size:11px;font-weight:700;color:var(--cyan);margin-bottom:6px">Xcode가 자동으로 하는 것</div>
+        <div style="font-size:12px;color:var(--muted)">
+          .mlmodel 파일을 프로젝트에 넣으면 Xcode가 <strong style="color:var(--text)">Swift 래퍼 코드를 자동 생성</strong>한다. <code style="color:var(--text);background:var(--bg);padding:1px 5px;border-radius:3px">ChewingClassifierInput</code>에 15개 피처값을 넣으면 <code style="color:var(--text);background:var(--bg);padding:1px 5px;border-radius:3px">chewing_label</code>과 확률이 반환된다. 개발자가 ML 추론 코드를 직접 짤 필요가 없다.
+        </div>
+      </div>
+      <div class="col" style="min-width:200px">
+        <div style="font-size:11px;font-weight:700;color:var(--green);margin-bottom:6px">온디바이스의 의미</div>
+        <div style="font-size:12px;color:var(--muted)">
+          서버 없이 <strong style="color:var(--text)">아이폰 안에서만</strong> 판단이 완결된다. IMU 데이터가 외부로 나가지 않아 개인정보 보호에 유리하고, 네트워크 없이도 동작한다. CoreML은 Apple Silicon의 Neural Engine을 활용해 배터리 소모 없이 빠르게 실행된다.
+        </div>
+      </div>
+    </div>
+
+    <!-- 코드 한 줄로 요약 -->
+    <div class="code" style="margin-top:16px">
+<span class="cm"># coreml_convert.py — 변환 핵심</span>
+coreml = ct.converters.sklearn.convert(clf, FEATURE_NAMES, <span class="st">"chewing_label"</span>)
+coreml.save(<span class="st">"ChewingClassifier.mlmodel"</span>)
+<span class="cm"># → 이 파일 하나에 나무 200그루의 모든 분기 기준이 담김</span>
+<span class="cm"># → Xcode가 읽어서 Swift 코드 자동 생성 → 아이폰에서 바로 실행</span>
+    </div>
+  </div>
+
+  <div style="margin-top:32px;text-align:center;color:var(--muted);font-size:12px">
+    세잎클로버 · 소마 17기 · chewing-vision
+  </div>
+</section>
+<hr class="divider">
+
+<!-- ═══════════════════════════════════════ -->
+<!-- 09. ROADMAP -->
+<!-- ═══════════════════════════════════════ -->
+<section id="s9">
+  <div class="section-label">09 · 앞으로 나아가야 할 것들</div>
+  <h2>로드맵</h2>
+  <p class="desc">현재 MVP 기준으로 부족한 것, 품질을 높이기 위한 것, 스케일업을 위한 것을 단계별로 정리.</p>
+
+  <!-- 단기 -->
+  <div style="display:flex;align-items:center;gap:10px;margin-bottom:14px">
+    <span style="width:10px;height:10px;border-radius:50%;background:#f87171;flex-shrink:0;display:inline-block"></span>
+    <span style="font-size:13px;font-weight:700;color:#f87171">단기 — MVP 완성 필수</span>
+    <span style="font-size:11px;color:var(--muted)">(App Store 출시 전)</span>
+  </div>
+  <div class="row" style="margin-bottom:32px">
+    <div class="feat-card col">
+      <div style="font-size:18px;margin-bottom:8px">📵</div>
+      <div class="feat-name" style="font-size:12px">지원 기기 Fallback UI</div>
+      <div class="feat-desc">AirPods 3세대·4세대 기본 모델은 CMHeadphoneMotionManager 미지원. 이 기기로 진입 시 기능 제한 안내 화면이 없으면 App Store 심사 리젝 위험. 온보딩에서 기기 체크 필수.</div>
+    </div>
+    <div class="feat-card col">
+      <div style="font-size:18px;margin-bottom:8px">🗣️</div>
+      <div class="feat-name" style="font-size:12px">말하기 vs 씹기 구분</div>
+      <div class="feat-desc">말할 때도 턱이 움직여 IMU 신호가 씹기와 유사하게 나타남. SPEAKING_DETECTION_SPEC.md 스펙이 이미 작성됨. 구현하지 않으면 대화 중 오탐률이 높아짐.</div>
+    </div>
+    <div class="feat-card col">
+      <div style="font-size:18px;margin-bottom:8px">🇯🇵</div>
+      <div class="feat-name" style="font-size:12px">일본어 현지화</div>
+      <div class="feat-desc">한·일 합산 TAM 400~550만 중 일본이 3배 큰 시장. 일본 App Store 출시 시 앱 전체 일본어 + 개인정보처리방침 일본어 버전 필수.</div>
+    </div>
+  </div>
+
+  <!-- 중기 -->
+  <div style="display:flex;align-items:center;gap:10px;margin-bottom:14px">
+    <span style="width:10px;height:10px;border-radius:50%;background:#fbbf24;flex-shrink:0;display:inline-block"></span>
+    <span style="font-size:13px;font-weight:700;color:#fbbf24">중기 — 모델 품질 개선</span>
+    <span style="font-size:11px;color:var(--muted)">(정확도·일반화)</span>
+  </div>
+  <div class="row" style="margin-bottom:32px">
+    <div class="feat-card col">
+      <div style="font-size:18px;margin-bottom:8px">👥</div>
+      <div class="feat-name" style="font-size:12px">다수 사용자 데이터 수집</div>
+      <div class="feat-desc">현재 7세션은 1~2인 데이터로 추정. LOSO F1이 0.49~0.97로 세션마다 편차가 크다는 게 일반화 부족의 신호. 최소 10명 이상 다양한 체형·식습관 데이터가 필요.</div>
+    </div>
+    <div class="feat-card col">
+      <div style="font-size:18px;margin-bottom:8px">🧠</div>
+      <div class="feat-name" style="font-size:12px">시계열 모델 실험</div>
+      <div class="feat-desc">Random Forest는 각 2초 윈도우를 독립적으로 판단. LSTM·1D-CNN은 이전 씹기 패턴을 기억해 연속성을 포착 가능. 단, CoreML 변환이 복잡해지고 모델 크기가 커짐.</div>
+    </div>
+    <div class="feat-card col">
+      <div style="font-size:18px;margin-bottom:8px">🍱</div>
+      <div class="feat-name" style="font-size:12px">음식 종류 분류 (7-class)</div>
+      <div class="feat-desc">현재 씹기/쉬기 이분법 → 딱딱함·부드러움·액체 등 세분화. SPEC US-015에 명시됨. 씹기 속도와 진동 강도 패턴이 음식마다 달라 추가 피처 설계 필요.</div>
+    </div>
+    <div class="feat-card col">
+      <div style="font-size:18px;margin-bottom:8px">🎯</div>
+      <div class="feat-name" style="font-size:12px">개인 캘리브레이션</div>
+      <div class="feat-desc">사람마다 씹는 힘·주파수·패턴이 다름. 첫 식사 세션에서 수집한 데이터로 온디바이스 fine-tuning → 개인화된 모델로 정확도 향상 기대.</div>
+    </div>
+  </div>
+
+  <!-- 장기 -->
+  <div style="display:flex;align-items:center;gap:10px;margin-bottom:14px">
+    <span style="width:10px;height:10px;border-radius:50%;background:#4ade80;flex-shrink:0;display:inline-block"></span>
+    <span style="font-size:13px;font-weight:700;color:#4ade80">장기 — 스케일업</span>
+    <span style="font-size:11px;color:var(--muted)">(프로덕션 수준)</span>
+  </div>
+  <div class="row" style="margin-bottom:32px">
+    <div class="feat-card col">
+      <div style="font-size:18px;margin-bottom:8px">🔋</div>
+      <div class="feat-name" style="font-size:12px">배터리 최적화</div>
+      <div class="feat-desc">현재 50Hz 연속 IMU 수집이 배터리에 미치는 영향 미측정. 식사 감지 후에만 고주파 수집, 평상시 저주파 polling 전환 등 adaptive sampling 전략 필요.</div>
+    </div>
+    <div class="feat-card col">
+      <div style="font-size:18px;margin-bottom:8px">⚙️</div>
+      <div class="feat-name" style="font-size:12px">재학습 자동화 파이프라인</div>
+      <div class="feat-desc">신규 세션 수집 → GT 라벨링 → LOSO 검증 → CoreML 변환 → 앱 배포까지 수동 단계가 많음. 데이터가 쌓일수록 이 과정의 자동화가 속도를 결정.</div>
+    </div>
+    <div class="feat-card col">
+      <div style="font-size:18px;margin-bottom:8px">📊</div>
+      <div class="feat-name" style="font-size:12px">식사 인사이트 대시보드</div>
+      <div class="feat-desc">씹기 횟수·속도·식사 시간을 장기 추적해 "오늘 평소보다 빨리 먹었어요" 같은 피드백 제공. 단순 감지에서 행동 변화 유도로 가치를 끌어올림.</div>
+    </div>
+  </div>
+
+  <!-- 현재 위치 타임라인 -->
+  <div class="card">
+    <div style="font-size:12px;font-weight:700;margin-bottom:20px">지금 우리는 어디에 있는가</div>
+    <div style="position:relative;padding-left:28px">
+      <!-- 세로선 -->
+      <div style="position:absolute;left:9px;top:8px;bottom:8px;width:2px;background:var(--border)"></div>
+
+      <div style="margin-bottom:22px;position:relative">
+        <div style="position:absolute;left:-24px;top:2px;width:14px;height:14px;border-radius:50%;background:var(--green);border:2px solid var(--bg)"></div>
+        <div style="font-size:12px;font-weight:700;color:var(--green)">완료 ✓ — IMU 수집 + 15-feature CoreML 모델</div>
+        <div style="font-size:11px;color:var(--muted);margin-top:3px">에어팟 IMU 수집 앱, 영상 기반 GT 라벨링, LOSO F1-chew 0.821, attitude delta_rms 3개 추가</div>
+      </div>
+
+      <div style="margin-bottom:22px;position:relative">
+        <div style="position:absolute;left:-24px;top:2px;width:14px;height:14px;border-radius:50%;background:var(--yellow);border:2px solid var(--bg)"></div>
+        <div style="font-size:12px;font-weight:700;color:var(--yellow)">진행 중 — 앱 UI · 온보딩</div>
+        <div style="font-size:11px;color:var(--muted);margin-top:3px">지원 기기 fallback, 실시간 씹기 카운트 화면, 식사 세션 기록</div>
+      </div>
+
+      <div style="margin-bottom:22px;position:relative">
+        <div style="position:absolute;left:-24px;top:2px;width:14px;height:14px;border-radius:50%;background:var(--border);border:2px solid var(--bg)"></div>
+        <div style="font-size:12px;font-weight:700;color:var(--muted)">다음 — 말하기 구분 + 다수 사용자 데이터</div>
+        <div style="font-size:11px;color:var(--muted);margin-top:3px">speaking detection 구현, 팀 내 데이터 수집 확대</div>
+      </div>
+
+      <div style="position:relative">
+        <div style="position:absolute;left:-24px;top:2px;width:14px;height:14px;border-radius:50%;background:var(--border);border:2px solid var(--bg)"></div>
+        <div style="font-size:12px;font-weight:700;color:var(--muted)">목표 — App Store 출시 (한국 → 일본)</div>
+        <div style="font-size:11px;color:var(--muted);margin-top:3px">한국 검증 후 일본 진출. 핵심 타겟 한·일 합산 400~550만 명</div>
+      </div>
+    </div>
+  </div>
+</section>
+<hr class="divider">
+
+<!-- ═══════════════════════════════════════ -->
+<!-- 10. CHANGELOG -->
+<!-- ═══════════════════════════════════════ -->
+<section id="s10">
+  <div class="section-label">10 · 변경 이력</div>
+  <h2>버전 히스토리</h2>
+  <p class="desc">chewing-imu-collector (iOS) + chewing-vision (ML) 양쪽 저장소를 통합한 시간순 기록.</p>
+
+  <!-- 범례 -->
+  <div style="display:flex;gap:16px;margin-bottom:24px;flex-wrap:wrap">
+    <div style="display:flex;align-items:center;gap:6px;font-size:12px">
+      <span style="width:12px;height:12px;border-radius:3px;background:rgba(59,130,246,.25);border:1px solid var(--blue);display:inline-block"></span>
+      <span>iOS 앱 (chewing-imu-collector)</span>
+    </div>
+    <div style="display:flex;align-items:center;gap:6px;font-size:12px">
+      <span style="width:12px;height:12px;border-radius:3px;background:rgba(167,139,250,.25);border:1px solid var(--purple);display:inline-block"></span>
+      <span>ML 모델 (chewing-vision)</span>
+    </div>
+  </div>
+
+  <!-- 안내 -->
+  <div style="font-size:11px;color:var(--muted);margin-bottom:14px">카드를 클릭하면 상세 변경 내역이 펼쳐집니다.</div>
+
+  <!-- 버전 카드들 -->
+  <div style="display:flex;flex-direction:column;gap:12px" id="ver-list"></div>
+
+  <div style="margin-top:32px;text-align:center;color:var(--muted);font-size:12px">
+    세잎클로버 · 소마 17기 · chewing-vision
+  </div>
+</section>
+
+<script>
+/* ══════════════════════════════════════════
+   SLIDING WINDOW CANVAS
+══════════════════════════════════════════ */
+(function(){
+  const canvas = document.getElementById('win-canvas');
+  const ctx = canvas.getContext('2d');
+  let animId = null, winPos = 0;
+
+  // generate signal once
+  const SIG = [];
+  let v = 0;
+  for(let i=0;i<600;i++){
+    v += (Math.random()-.5)*.3; v *= .92;
+    const chew = (i>80&&i<180)||(i>250&&i<370)||(i>430&&i<540);
+    if(chew) v += Math.sin(i*.25)*.13;
+    SIG.push(v);
+  }
+
+  function resize(){
+    canvas.width  = canvas.offsetWidth  * devicePixelRatio;
+    canvas.height = canvas.offsetHeight * devicePixelRatio;
+    ctx.scale(devicePixelRatio, devicePixelRatio);
+    draw(winPos);
+  }
+
+  function draw(pos){
+    const W=canvas.offsetWidth, H=canvas.offsetHeight;
+    ctx.clearRect(0,0,W,H);
+    const OX=40, OW=W-80, N=SIG.length, WN=100, pxPS=OW/N;
+
+    // axis
+    ctx.strokeStyle='#334155'; ctx.lineWidth=1;
+    ctx.beginPath(); ctx.moveTo(OX,H*.82); ctx.lineTo(OX+OW,H*.82); ctx.stroke();
+
+    // full signal (dim)
+    ctx.beginPath(); ctx.strokeStyle='#334155'; ctx.lineWidth=1.5;
+    for(let i=0;i<N;i++){
+      const x=OX+i*pxPS, y=H*.45-SIG[i]*H*.28;
+      i===0?ctx.moveTo(x,y):ctx.lineTo(x,y);
+    }
+    ctx.stroke();
+
+    // window box
+    const ws=Math.floor(pos), we=ws+WN;
+    const wx=OX+ws*pxPS, ww=WN*pxPS;
+    ctx.fillStyle='rgba(59,130,246,.1)'; ctx.fillRect(wx,8,ww,H*.82-8);
+    ctx.strokeStyle='#3b82f6'; ctx.lineWidth=2; ctx.strokeRect(wx,8,ww,H*.82-8);
+
+    // signal in window (bright)
+    ctx.beginPath(); ctx.strokeStyle='#60a5fa'; ctx.lineWidth=2;
+    for(let i=ws;i<Math.min(we,N);i++){
+      const x=OX+i*pxPS, y=H*.45-SIG[i]*H*.28;
+      i===ws?ctx.moveTo(x,y):ctx.lineTo(x,y);
+    }
+    ctx.stroke();
+
+    // stride ticks
+    ctx.strokeStyle='rgba(100,116,139,.35)'; ctx.lineWidth=1; ctx.setLineDash([3,3]);
+    for(let i=0;i<N;i+=25){
+      const x=OX+i*pxPS;
+      ctx.beginPath(); ctx.moveTo(x,8); ctx.lineTo(x,H*.82); ctx.stroke();
+    }
+    ctx.setLineDash([]);
+
+    // label
+    ctx.fillStyle='#93c5fd'; ctx.font='bold 11px -apple-system'; ctx.textAlign='center';
+    const s=(ws/50).toFixed(1), e=(ws/50+2).toFixed(1);
+    ctx.fillText(`${s}s ~ ${e}s`, wx+ww/2, H*.82+16);
+
+    // time axis labels
+    ctx.fillStyle='#475569'; ctx.font='10px -apple-system';
+    for(let t=0;t<=12;t+=2){
+      ctx.fillText(t+'s', OX+t*50*pxPS, H*.82+28);
+    }
+  }
+
+  window.startWindow = function(){
+    if(animId) cancelAnimationFrame(animId);
+    function step(){ winPos=(winPos+.7)%(600-100); draw(winPos); animId=requestAnimationFrame(step); }
+    step();
+  };
+  window.stopWindow = function(){ if(animId){ cancelAnimationFrame(animId); animId=null; } };
+
+  window.addEventListener('resize', resize);
+  resize();
+})();
+
+
+/* ══════════════════════════════════════════
+   DECISION TREE SVG  (with path highlight)
+══════════════════════════════════════════ */
+(function(){
+  // nodes: id, label, threshold, x, y, leaf, cls
+  const N = [
+    {id:0,  lbl:'user_accel_x_rms', th:'≤ 0.01', x:500, y:40,  leaf:false},
+    {id:1,  lbl:'user_accel_z_std', th:'≤ 0.01', x:250, y:130, leaf:false},
+    {id:2,  lbl:'user_accel_z_rms', th:'≤ 0.01', x:750, y:130, leaf:false},
+    {id:3,  lbl:'att_yaw_Δrms',     th:'≤ 0.00', x:130, y:220, leaf:false},
+    {id:4,  lbl:'rotation_x_std',   th:'≤ 0.03', x:370, y:220, leaf:false},
+    {id:5,  lbl:'쉬는중',           th:'',       x:620, y:220, leaf:true, cls:0},
+    {id:6,  lbl:'att_roll_Δrms',    th:'≤ 0.01', x:860, y:220, leaf:false},
+    {id:7,  lbl:'rotation_z_std',   th:'≤ 0.02', x:60,  y:320, leaf:false},
+    {id:8,  lbl:'쉬는중',           th:'',       x:200, y:320, leaf:true, cls:0},
+    {id:9,  lbl:'쉬는중',           th:'',       x:310, y:320, leaf:true, cls:0},
+    {id:10, lbl:'씹는중',           th:'',       x:440, y:320, leaf:true, cls:1},
+    {id:11, lbl:'rotation_x_rms',   th:'≤ 0.04', x:780, y:320, leaf:false},
+    {id:12, lbl:'accel_x_rms',      th:'≤ 0.02', x:950, y:320, leaf:false},
+    {id:13, lbl:'쉬는중',           th:'',       x:20,  y:415, leaf:true, cls:0},
+    {id:14, lbl:'씹는중',           th:'',       x:100, y:415, leaf:true, cls:1},
+    {id:15, lbl:'쉬는중',           th:'',       x:730, y:415, leaf:true, cls:0},
+    {id:16, lbl:'씹는중',           th:'',       x:830, y:415, leaf:true, cls:1},
+    {id:17, lbl:'쉬는중',           th:'',       x:910, y:415, leaf:true, cls:0},
+    {id:18, lbl:'씹는중',           th:'',       x:995, y:415, leaf:true, cls:1},
+  ];
+  const EDGES = [
+    [0,1,'YES'],[0,2,'NO'],
+    [1,3,'YES'],[1,4,'NO'],
+    [2,5,'YES'],[2,6,'NO'],
+    [3,7,'YES'],[3,8,'NO'],
+    [4,9,'YES'],[4,10,'NO'],
+    [6,11,'YES'],[6,12,'NO'],
+    [7,13,'YES'],[7,14,'NO'],
+    [11,15,'YES'],[11,16,'NO'],
+    [12,17,'YES'],[12,18,'NO'],
+  ];
+  // parent map
+  const PARENT = {};
+  EDGES.forEach(([s,t])=>{ PARENT[t]=s; });
+
+  function getPath(id){
+    const path=[];
+    let cur=id;
+    while(cur!==undefined){ path.push(cur); cur=PARENT[cur]; }
+    return path;
+  }
+
+  const svg = document.getElementById('tree-svg');
+  const maxX = Math.max(...N.map(n=>n.x))+60;
+  const maxY = Math.max(...N.map(n=>n.y))+50;
+  svg.setAttribute('viewBox',`0 0 ${maxX} ${maxY}`);
+  svg.setAttribute('width','100%');
+  svg.setAttribute('height',maxY);
+
+  const edgeEls={}, nodeRects={};
+
+  // draw edges
+  EDGES.forEach(([s,t,lbl])=>{
+    const sn=N[s], tn=N[t];
+    const line=document.createElementNS('http://www.w3.org/2000/svg','line');
+    line.setAttribute('x1',sn.x); line.setAttribute('y1',sn.y+19);
+    line.setAttribute('x2',tn.x); line.setAttribute('y2',tn.y-19);
+    line.setAttribute('stroke','#334155'); line.setAttribute('stroke-width','1.5');
+    svg.appendChild(line);
+    edgeEls[`${s}-${t}`]=line;
+
+    // label
+    const tx=(sn.x+tn.x)/2, ty=(sn.y+tn.y)/2;
+    const lt=document.createElementNS('http://www.w3.org/2000/svg','text');
+    lt.setAttribute('x',tx); lt.setAttribute('y',ty);
+    lt.setAttribute('text-anchor','middle'); lt.setAttribute('font-size','10');
+    lt.setAttribute('font-weight','700');
+    lt.setAttribute('fill',lbl==='YES'?'#4ade80':'#f87171');
+    lt.textContent=lbl;
+    svg.appendChild(lt);
+  });
+
+  // draw nodes
+  N.forEach(n=>{
+    const g=document.createElementNS('http://www.w3.org/2000/svg','g');
+    g.setAttribute('transform',`translate(${n.x},${n.y})`);
+    if(n.leaf) g.style.cursor='pointer';
+
+    const NW=n.leaf?58:128, NH=n.leaf?32:38;
+    const rect=document.createElementNS('http://www.w3.org/2000/svg','rect');
+    rect.setAttribute('x',-NW/2); rect.setAttribute('y',-NH/2);
+    rect.setAttribute('width',NW); rect.setAttribute('height',NH);
+    rect.setAttribute('rx','6');
+    rect.setAttribute('fill', n.leaf?(n.cls===1?'rgba(74,222,128,.18)':'rgba(100,116,139,.15)'):'rgba(59,130,246,.12)');
+    rect.setAttribute('stroke', n.leaf?(n.cls===1?'#4ade80':'#475569'):'#3b82f6');
+    rect.setAttribute('stroke-width','1');
+    g.appendChild(rect);
+    nodeRects[n.id]=rect;
+
+    const t1=document.createElementNS('http://www.w3.org/2000/svg','text');
+    t1.setAttribute('x','0'); t1.setAttribute('y', n.th?'-4':'5');
+    t1.setAttribute('text-anchor','middle'); t1.setAttribute('font-size','9.5');
+    t1.setAttribute('font-weight','700');
+    t1.setAttribute('fill', n.leaf?(n.cls===1?'#4ade80':'#94a3b8'):'#93c5fd');
+    t1.textContent=n.lbl;
+    g.appendChild(t1);
+
+    if(n.th){
+      const t2=document.createElementNS('http://www.w3.org/2000/svg','text');
+      t2.setAttribute('x','0'); t2.setAttribute('y','11');
+      t2.setAttribute('text-anchor','middle'); t2.setAttribute('font-size','9');
+      t2.setAttribute('fill','#fbbf24');
+      t2.textContent=n.th;
+      g.appendChild(t2);
+    }
+
+    if(n.leaf){
+      g.addEventListener('click',()=>highlightPath(n.id));
+    }
+    svg.appendChild(g);
+  });
+
+  let lastPath=[];
+  function highlightPath(leafId){
+    // reset
+    lastPath.forEach(id=>{
+      nodeRects[id].setAttribute('stroke', N[id].leaf?(N[id].cls===1?'#4ade80':'#475569'):'#3b82f6');
+      nodeRects[id].setAttribute('stroke-width','1');
+    });
+    Object.values(edgeEls).forEach(el=>{ el.setAttribute('stroke','#334155'); el.setAttribute('stroke-width','1.5'); });
+
+    const path=getPath(leafId);
+    lastPath=path;
+    path.forEach(id=>{
+      nodeRects[id].setAttribute('stroke','#f472b6');
+      nodeRects[id].setAttribute('stroke-width','2.5');
+    });
+    for(let i=1;i<path.length;i++){
+      const key=`${path[i]}-${path[i-1]}`;
+      if(edgeEls[key]){
+        edgeEls[key].setAttribute('stroke','#f472b6');
+        edgeEls[key].setAttribute('stroke-width','2.5');
+      }
+    }
+  }
+})();
+
+
+/* ══════════════════════════════════════════
+   FOREST VOTING
+══════════════════════════════════════════ */
+(function(){
+  const NTrees=12;
+  const row=document.getElementById('trees-row');
+  for(let i=0;i<NTrees;i++){
+    const c=document.createElement('div');
+    c.className='tree-card'; c.id=`tc-${i}`;
+    c.innerHTML=`<div class="tree-num">나무 ${i+1}</div><div class="tree-vote" id="tv-${i}">—</div>`;
+    row.appendChild(c);
+  }
+  let voteInterval=null;
+
+  window.runVoting=function(){
+    resetVoting();
+    const results=Array.from({length:NTrees},()=>Math.random()>.33?1:0);
+    let shown=0;
+    voteInterval=setInterval(()=>{
+      if(shown>=NTrees){ clearInterval(voteInterval); showResult(results); return; }
+      const i=shown++, v=results[i];
+      document.getElementById(`tc-${i}`).className='tree-card '+(v?'voted-chew':'voted-rest');
+      const tv=document.getElementById(`tv-${i}`);
+      tv.textContent=v?'씹는중 ✓':'쉬는중';
+      tv.style.color=v?'var(--green)':'var(--muted)';
+    },120);
+  };
+
+  function showResult(r){
+    const chew=r.filter(v=>v).length, rest=NTrees-chew;
+    const pct=Math.round(chew/NTrees*100);
+    const vc=document.getElementById('vote-chew'), vr=document.getElementById('vote-rest');
+    vc.style.width=pct+'%'; vc.textContent=`씹는중 ${chew}표`;
+    vr.style.width=(100-pct)+'%'; vr.textContent=`쉬는중 ${rest}표`;
+    const vd=document.getElementById('verdict');
+    vd.textContent=chew>rest?'→ 씹는중 🍚':'→ 쉬는중 😴';
+    vd.style.color=chew>rest?'var(--green)':'var(--muted)';
+  }
+
+  window.resetVoting=function(){
+    if(voteInterval) clearInterval(voteInterval);
+    for(let i=0;i<NTrees;i++){
+      document.getElementById(`tc-${i}`).className='tree-card';
+      const tv=document.getElementById(`tv-${i}`); tv.textContent='—'; tv.style.color='';
+    }
+    document.getElementById('vote-chew').style.width='0%'; document.getElementById('vote-chew').textContent='씹는중';
+    document.getElementById('vote-rest').style.width='100%'; document.getElementById('vote-rest').textContent='쉬는중';
+    document.getElementById('verdict').textContent='—'; document.getElementById('verdict').style.color='var(--muted)';
+  };
+})();
+
+
+/* ══════════════════════════════════════════
+   FEATURE IMPORTANCE (all 15)
+══════════════════════════════════════════ */
+(function(){
+  const data=[
+    {name:'user_accel_z_rms',        val:.1498, color:'#4ade80', isNew:false, desc:'상하(z) 가속도의 평균 크기. 씹을 때 턱이 위아래로 움직여 에어팟에 가장 직접 전달되는 진동. 가장 강한 씹기 신호.'},
+    {name:'user_accel_z_std',        val:.1426, color:'#4ade80', isNew:false, desc:'상하 가속도의 불규칙 정도(표준편차). 씹는 리듬은 주기적으로 변동하므로 쉬는 상태보다 표준편차가 높게 나타남.'},
+    {name:'rotation_y_rms',          val:.1217, color:'#3b82f6', isNew:false, desc:'상하 끄덕임 각속도의 평균 크기. 씹을 때 머리가 미세하게 앞뒤로 끄덕이는 패턴을 포착.'},
+    {name:'user_accel_y_std',        val:.0968, color:'#4ade80', isNew:false, desc:'앞뒤(y) 가속도의 불규칙 정도. 씹기 리듬의 앞뒤 성분이 주기적으로 변동.'},
+    {name:'attitude_roll_delta_rms', val:.0947, color:'#a78bfa', isNew:true,  desc:'머리 기울기(roll) 각도의 샘플 간 잔떨림 크기. 자이로+가속도 융합 신호라 노이즈가 적고, 씹기 리듬이 뚜렷이 남음. NEW 피처 중 1위.'},
+    {name:'user_accel_y_rms',        val:.0851, color:'#4ade80', isNew:false, desc:'앞뒤 가속도의 평균 크기. 씹기 동작의 앞뒤 방향 진동 강도.'},
+    {name:'rotation_y_std',          val:.0713, color:'#3b82f6', isNew:false, desc:'상하 끄덕임 각속도의 들쭉날쭉함. 씹는 리듬에 따라 고르게 변동.'},
+    {name:'user_accel_x_std',        val:.0566, color:'#4ade80', isNew:false, desc:'좌우(x) 가속도의 불규칙 정도. 씹는 방식에 따라 좌우로 약간의 진동이 섞임.'},
+    {name:'attitude_yaw_delta_rms',  val:.0412, color:'#a78bfa', isNew:true,  desc:'좌우 돌림(yaw) 각도의 잔떨림. ±π 불연속성 때문에 atan2 보정이 필수였던 피처.'},
+    {name:'attitude_pitch_delta_rms',val:.0283, color:'#a78bfa', isNew:true,  desc:'끄덕임(pitch) 각도의 잔떨림. rotation_y와 다르게 센서 융합 후의 절대 각도 변화를 봄.'},
+    {name:'rotation_x_rms',          val:.0210, color:'#3b82f6', isNew:false, desc:'좌우 회전 각속도의 평균 크기. 씹기보다 고개 돌림 동작에 민감해 중요도가 낮은 편.'},
+    {name:'rotation_z_rms',          val:.0189, color:'#3b82f6', isNew:false, desc:'앞뒤 기울기 각속도의 평균 크기. 고개를 갸웃하는 방향의 회전 강도.'},
+    {name:'rotation_x_std',          val:.0178, color:'#3b82f6', isNew:false, desc:'좌우 회전의 들쭉날쭉함. 씹기와 연관성이 낮아 중요도 하위권.'},
+    {name:'user_accel_x_rms',        val:.0158, color:'#4ade80', isNew:false, desc:'좌우 가속도의 평균 크기. 씹기 동작은 주로 상하·앞뒤라 좌우 신호는 상대적으로 약함.'},
+    {name:'rotation_z_std',          val:.0134, color:'#3b82f6', isNew:false, desc:'앞뒤 기울기 회전의 들쭉날쭉함. 씹기와 연관성이 가장 낮은 피처.'},
+  ];
+  const container=document.getElementById('fi-chart');
+  const max=data[0].val;
+  data.forEach((d,i)=>{
+    const row=document.createElement('div');
+    row.className='fi-row';
+    row.innerHTML=`
+      <div class="fi-label">
+        <div style="display:flex;align-items:center;gap:4px">
+          <span style="font-size:10px;font-weight:700;color:${d.color};width:18px;display:inline-block">${i+1}</span>
+          <span style="font-weight:600">${d.name}</span>
+          ${d.isNew?'<span class="chip chip-new">NEW</span>':''}
+        </div>
+        <div style="font-size:10px;color:#475569;line-height:1.4;margin-top:2px;padding-left:22px">${d.desc}</div>
+      </div>
+      <div style="display:flex;flex-direction:column;justify-content:center;flex:1;gap:0">
+        <div class="fi-bar-wrap">
+          <div class="fi-bar" style="width:0%;background:${d.color}" data-w="${(d.val/max*100).toFixed(1)}%"></div>
+        </div>
+      </div>
+      <div class="fi-val">${d.val.toFixed(4)}</div>`;
+    container.appendChild(row);
+  });
+
+  new IntersectionObserver(entries=>{
+    if(!entries[0].isIntersecting) return;
+    document.querySelectorAll('.fi-bar').forEach(el=>{ setTimeout(()=>{ el.style.width=el.dataset.w; },80); });
+  },{threshold:.25}).observe(container);
+})();
+
+
+/* ══════════════════════════════════════════
+   CHANGELOG — collapsible version cards
+══════════════════════════════════════════ */
+(function(){
+  const versions=[
+    {v:'v0.6', date:'2026-05-18', title:'15-feature attitude 모델', color:'var(--green)', isCurrent:true,
+     ios:['ChewingPredictor / SessionAnalyzer 15-feature 입력 확장','attitude_roll/pitch/yaw delta_rms 계산 추가','angleDeltaRms 헬퍼 (yaw ±π 래핑 보정)','새 .mlmodel (610KB) 교체'],
+     ml: ['utils.py에 attitude delta_rms 피처 3개 추가','각도 불연속 보정 (atan2 wrap)','LOSO F1-chew <strong style="color:var(--green)">0.809 → 0.823</strong>','cml_env (Python 3.9 + sklearn 1.5.1) 환경 구축']},
+    {v:'v0.5', date:'2026-05-13', title:'composite w=0.3 GT 통일', color:'var(--cyan)', isCurrent:false,
+     ios:['composite w=0.3 라벨로 학습된 .mlmodel 적용','1285 windows 데이터로 재학습'],
+     ml: ['composite mar_weight=0.3 canonical GT 시그널로 확정','6 세션 기반 재학습']},
+    {v:'v0.4', date:'2026-05 초', title:'세션 상세 UI · Upload 분리', color:'var(--yellow)', isCurrent:false,
+     ios:['SessionDetailView에서 세션별 업로드 상태 격리','투명 프롬프트 오버레이 추가','Upload 배지 + IMU 통계 상세 정보 표시'],
+     ml: []},
+    {v:'v0.3', date:'2026-04 말', title:'IMU-only 탭 · 가이드 프롬프트', color:'#fb923c', isCurrent:false,
+     ios:['IMU 전용 탭 추가 (영상 없이 IMU만 수집)','chew/rest 가이드 프롬프트 UI','백그라운드 keep-alive 동작'],
+     ml: []},
+    {v:'v0.2', date:'2026-04', title:'Annotate UI · LOSO 도구', color:'var(--red)', isCurrent:false,
+     ios:[],
+     ml: ['Split-screen Annotate UI (시그널 trace + 진행 strip)','composite signal mode, motion gate 도입','LOSO CV 파이프라인 구축','auto-discover sessions: worktree/main 양쪽 호환']},
+    {v:'v0.1', date:'초기', title:'초기 커밋', color:'var(--muted)', isCurrent:false,
+     ios:['AirPods IMU 씹기 감지 iOS 앱 초기 커밋','CMHeadphoneMotionManager 기반 데이터 수집'],
+     ml: ['chewing vision 파이프라인 (MediaPipe Face Landmarker)','Rich CLI UX, Firebase fetch, interactive menu']},
+  ];
+
+  function block(emoji, title, color, items){
+    if(!items.length) return '';
+    return `<div style="flex:1;min-width:240px;background:${color.bg};border:1px solid ${color.border};border-radius:8px;padding:12px">
+      <div style="font-size:11px;font-weight:700;color:${color.text};margin-bottom:6px">${emoji} ${title}</div>
+      <ul style="font-size:12px;color:var(--muted);line-height:1.7;padding-left:18px;margin:0">
+        ${items.map(x=>`<li>${x}</li>`).join('')}
+      </ul>
+    </div>`;
+  }
+
+  const list=document.getElementById('ver-list');
+  versions.forEach((d,i)=>{
+    const card=document.createElement('div');
+    card.className='card ver-card';
+    card.style.borderLeft=`3px solid ${d.color}`;
+    card.style.padding='16px';
+    if(i===0) card.classList.add('open'); // first one open by default
+
+    const iosCol={bg:'rgba(59,130,246,.07)', border:'rgba(59,130,246,.2)', text:'var(--blue)'};
+    const mlCol ={bg:'rgba(167,139,250,.07)', border:'rgba(167,139,250,.2)', text:'var(--purple)'};
+
+    card.innerHTML=`
+      <div class="ver-header">
+        <div style="display:flex;align-items:baseline;gap:8px;flex-wrap:wrap">
+          <span style="font-size:18px;font-weight:800;color:${d.color}">${d.v}</span>
+          ${d.isCurrent?`<span class="chip" style="background:rgba(74,222,128,.15);color:var(--green)">현재</span>`:''}
+          <span style="font-size:11px;color:var(--muted)">${d.date}</span>
+          <span style="font-size:12px;font-weight:700;color:${d.color}">— ${d.title}</span>
+        </div>
+        <span class="chev">▾</span>
+      </div>
+      <div class="ver-body">
+        ${block('📱','iOS',iosCol,d.ios)}
+        ${block('🧠','ML', mlCol, d.ml)}
+      </div>`;
+
+    card.addEventListener('click',()=>card.classList.toggle('open'));
+    list.appendChild(card);
+  });
+})();
+
+
+/* ══════════════════════════════════════════
+   LOSO — simple row of boxes
+══════════════════════════════════════════ */
+(function(){
+  const sessions=[
+    {id:'hz0mma',f1c:.972,f1r:.788},
+    {id:'838cje',f1c:.926,f1r:.400},
+    {id:'a61a4c',f1c:.800,f1r:.340},
+    {id:'uj2e92',f1c:.800,f1r:.474},
+    {id:'n1xetu',f1c:.760,f1r:.827},
+    {id:'v1kr2w',f1c:.588,f1r:.916},
+    {id:'j2b3jd',f1c:.490,f1r:.695},
+  ];
+  const boxContainer=document.getElementById('loso-boxes');
+  const lbl=document.getElementById('loso-label');
+
+  // create boxes
+  sessions.forEach((s,i)=>{
+    const b=document.createElement('div');
+    b.className='loso-box train'; b.id=`lb-${i}`;
+    b.innerHTML=`학습<div class="sid">${s.id}</div>`;
+    boxContainer.appendChild(b);
+  });
+
+  function setRound(testIdx){
+    sessions.forEach((_,i)=>{
+      const b=document.getElementById(`lb-${i}`);
+      if(i===testIdx){
+        b.className='loso-box test';
+        b.innerHTML=`시험<div class="sid">${sessions[i].id}</div>`;
+      } else {
+        b.className='loso-box train';
+        b.innerHTML=`학습<div class="sid">${sessions[i].id}</div>`;
+      }
+    });
+    lbl.textContent=`Round ${testIdx+1}/7`;
+  }
+
+  setRound(0);
+  let losoInterval=null, cur=0;
+  window.startLoso=function(){
+    if(losoInterval) clearInterval(losoInterval);
+    cur=0; setRound(0);
+    losoInterval=setInterval(()=>{ cur=(cur+1)%sessions.length; setRound(cur); },1100);
+  };
+  window.stopLoso=function(){ if(losoInterval){ clearInterval(losoInterval); losoInterval=null; } };
+
+  // result cards
+  const rc=document.getElementById('loso-results');
+  sessions.forEach(s=>{
+    const c=document.createElement('div'); c.className='loso-result-card';
+    const color=s.f1c>=.85?'var(--green)':s.f1c>=.7?'var(--yellow)':'var(--red)';
+    c.innerHTML=`<div class="sid">${s.id}</div><div class="f1" style="color:${color}">${s.f1c.toFixed(3)}</div><div style="font-size:10px;color:var(--muted);margin-top:2px">F1-chew</div><div style="font-size:11px;color:var(--muted);margin-top:3px">rest: ${s.f1r.toFixed(3)}</div>`;
+    rc.appendChild(c);
+  });
+  const pc=document.createElement('div'); pc.className='loso-result-card';
+  pc.style.borderColor='var(--purple)'; pc.style.background='rgba(167,139,250,.07)';
+  pc.innerHTML=`<div class="sid" style="color:var(--purple)">POOLED</div><div class="f1" style="color:var(--purple)">0.821</div><div style="font-size:10px;color:var(--muted);margin-top:2px">F1-chew</div><div style="font-size:11px;color:var(--muted);margin-top:3px">rest: 0.719</div>`;
+  rc.appendChild(pc);
+})();
+</script>
+</body>
+</html>

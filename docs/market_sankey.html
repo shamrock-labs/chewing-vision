@@ -1,0 +1,306 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <title>오도독 TAM — 한국·일본 시장 깔때기</title>
+  <script src="https://d3js.org/d3.v7.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/d3-sankey@0.12.3/dist/d3-sankey.min.js"></script>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      background: #0f172a;
+      font-family: -apple-system, 'Apple SD Gothic Neo', 'Noto Sans KR', sans-serif;
+      padding: 44px 32px 40px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+    }
+    h1 {
+      color: #f1f5f9;
+      font-size: 26px;
+      font-weight: 800;
+      text-align: center;
+      letter-spacing: -0.5px;
+    }
+    .sub {
+      color: #64748b;
+      font-size: 13px;
+      text-align: center;
+      margin-top: 6px;
+      margin-bottom: 32px;
+    }
+    .stats {
+      display: flex;
+      gap: 20px;
+      margin-top: 32px;
+    }
+    .stat {
+      background: #1e293b;
+      border: 1px solid #334155;
+      border-radius: 12px;
+      padding: 18px 24px;
+      text-align: center;
+    }
+    .stat .v { font-size: 28px; font-weight: 800; letter-spacing: -1px; }
+    .stat .l { font-size: 12px; color: #64748b; margin-top: 4px; line-height: 1.5; }
+    .legend {
+      display: flex;
+      gap: 20px;
+      margin-top: 18px;
+    }
+    .lg {
+      display: flex;
+      align-items: center;
+      gap: 7px;
+      font-size: 12px;
+      color: #94a3b8;
+    }
+    .lg span {
+      width: 10px;
+      height: 10px;
+      border-radius: 2px;
+      display: inline-block;
+    }
+  </style>
+</head>
+<body>
+  <h1>📊 오도독 &nbsp;·&nbsp; 한국·일본 TAM 시장 깔때기</h1>
+  <p class="sub">CMHeadphoneMotionManager 지원 AirPods 보유 유저 기준 &nbsp;·&nbsp; 2024 데이터 &nbsp;·&nbsp; 단위: 만 명</p>
+
+  <div id="chart"></div>
+
+  <div class="stats">
+    <div class="stat">
+      <div class="v" style="color:#3b82f6">120만</div>
+      <div class="l">🇰🇷 한국<br>핵심 타겟</div>
+    </div>
+    <div class="stat">
+      <div class="v" style="color:#ef4444">350만</div>
+      <div class="l">🇯🇵 일본<br>핵심 타겟</div>
+    </div>
+    <div class="stat">
+      <div class="v" style="color:#a78bfa">470만</div>
+      <div class="l">🎯 한·일 합산<br>오도독 TAM</div>
+    </div>
+    <div class="stat">
+      <div class="v" style="color:#94a3b8">1,296만</div>
+      <div class="l">지원 기기<br>보유 (전 연령)</div>
+    </div>
+  </div>
+
+  <div class="legend">
+    <div class="lg"><span style="background:#3b82f6"></span>한국 경로</div>
+    <div class="lg"><span style="background:#ef4444"></span>일본 경로</div>
+    <div class="lg"><span style="background:#a78bfa"></span>오도독 TAM</div>
+    <div class="lg"><span style="background:#334155;opacity:0.5"></span>전환 불가</div>
+  </div>
+
+  <script>
+  (function () {
+    const W = 1280, H = 680;
+    const M = { top: 20, right: 195, bottom: 20, left: 195 };
+
+    const WASTE = new Set([
+      "kr_nip", "jp_nip", "kr_nap", "jp_nap",
+      "kr_ndev", "jp_ndev", "kr_other", "jp_other"
+    ]);
+
+    const COLORS = {
+      kr_sp:    "#3b82f6",
+      jp_sp:    "#ef4444",
+      kr_ip:    "#60a5fa",
+      jp_ip:    "#f87171",
+      kr_nip:   "#1b3360",
+      jp_nip:   "#3d1616",
+      kr_ap:    "#93c5fd",
+      jp_ap:    "#fca5a5",
+      kr_nap:   "#1b3360",
+      jp_nap:   "#3d1616",
+      kr_dev:   "#bfdbfe",
+      jp_dev:   "#fecaca",
+      kr_ndev:  "#1b3360",
+      jp_ndev:  "#3d1616",
+      tam:      "#a78bfa",
+      kr_other: "#1e293b",
+      jp_other: "#1e293b",
+    };
+
+    const NAMES = {
+      kr_sp:    ["🇰🇷 한국 스마트폰", "4,500만"],
+      jp_sp:    ["🇯🇵 일본 스마트폰", "9,000만"],
+      kr_ip:    ["iPhone KR", "1,200만"],
+      kr_nip:   ["비iPhone KR", "3,300만"],
+      jp_ip:    ["iPhone JP", "4,800만"],
+      jp_nip:   ["비iPhone JP", "4,200만"],
+      kr_ap:    ["AirPods KR", "480만"],
+      kr_nap:   ["비AirPods KR", "720만"],
+      jp_ap:    ["AirPods JP", "2,400만"],
+      jp_nap:   ["비AirPods JP", "2,400만"],
+      kr_dev:   ["지원기기 KR", "216만"],
+      kr_ndev:  ["미지원 KR", "264만"],
+      jp_dev:   ["지원기기 JP", "1,080만"],
+      jp_ndev:  ["미지원 JP", "1,320만"],
+      tam:      ["🎯 오도독 TAM", "470만"],
+      kr_other: ["기타 연령 KR", "96만"],
+      jp_other: ["기타 연령 JP", "730만"],
+    };
+
+    const LINK_LABELS = {
+      "kr_sp→kr_ip":  "27%",
+      "jp_sp→jp_ip":  "53%",
+      "kr_ip→kr_ap":  "40%",
+      "jp_ip→jp_ap":  "50%",
+      "kr_ap→kr_dev": "45%",
+      "jp_ap→jp_dev": "45%",
+      "kr_dev→tam":   "55%",
+      "jp_dev→tam":   "32%",
+    };
+
+    const gNodes = Object.keys(NAMES).map(id => ({ id }));
+    const gLinks = [
+      { source: "kr_sp",  target: "kr_ip",    value: 1200 },
+      { source: "kr_sp",  target: "kr_nip",   value: 3300 },
+      { source: "jp_sp",  target: "jp_ip",    value: 4800 },
+      { source: "jp_sp",  target: "jp_nip",   value: 4200 },
+      { source: "kr_ip",  target: "kr_ap",    value: 480  },
+      { source: "kr_ip",  target: "kr_nap",   value: 720  },
+      { source: "jp_ip",  target: "jp_ap",    value: 2400 },
+      { source: "jp_ip",  target: "jp_nap",   value: 2400 },
+      { source: "kr_ap",  target: "kr_dev",   value: 216  },
+      { source: "kr_ap",  target: "kr_ndev",  value: 264  },
+      { source: "jp_ap",  target: "jp_dev",   value: 1080 },
+      { source: "jp_ap",  target: "jp_ndev",  value: 1320 },
+      { source: "kr_dev", target: "tam",      value: 120  },
+      { source: "kr_dev", target: "kr_other", value: 96   },
+      { source: "jp_dev", target: "tam",      value: 350  },
+      { source: "jp_dev", target: "jp_other", value: 730  },
+    ];
+
+    const sankey = d3.sankey()
+      .nodeId(d => d.id)
+      .nodeWidth(16)
+      .nodePadding(14)
+      .nodeAlign(d3.sankeyLeft)
+      .extent([[M.left, M.top], [W - M.right, H - M.bottom]]);
+
+    const { nodes, links } = sankey({
+      nodes: gNodes.map(d => ({ ...d })),
+      links: gLinks.map(d => ({ ...d })),
+    });
+
+    const svg = d3.select("#chart").append("svg")
+      .attr("width", W).attr("height", H);
+
+    // Glow filter for TAM node
+    const defs = svg.append("defs");
+    const filt = defs.append("filter")
+      .attr("id", "glow")
+      .attr("x", "-60%").attr("y", "-60%")
+      .attr("width", "220%").attr("height", "220%");
+    filt.append("feGaussianBlur").attr("stdDeviation", "5").attr("result", "blur");
+    const fm = filt.append("feMerge");
+    fm.append("feMergeNode").attr("in", "blur");
+    fm.append("feMergeNode").attr("in", "SourceGraphic");
+
+    // Column header labels
+    const COL_LABELS = ["스마트폰 시장", "iPhone", "AirPods", "지원 기기", "핵심 타겟"];
+    const colX = {};
+    nodes.forEach(d => {
+      if (colX[d.depth] === undefined) colX[d.depth] = (d.x0 + d.x1) / 2;
+    });
+    Object.entries(colX).forEach(([depth, x]) => {
+      svg.append("text")
+        .attr("x", x).attr("y", 10)
+        .attr("text-anchor", "middle")
+        .attr("font-family", "-apple-system,'Apple SD Gothic Neo',sans-serif")
+        .attr("font-size", "11px")
+        .attr("font-weight", "600")
+        .attr("fill", "#475569")
+        .text(COL_LABELS[+depth] || "");
+    });
+
+    // Links
+    svg.append("g").attr("fill", "none")
+      .selectAll("path")
+      .data(links)
+      .join("path")
+        .attr("d", d3.sankeyLinkHorizontal())
+        .attr("stroke-width", d => Math.max(1, d.width))
+        .attr("stroke", d => {
+          const tid = d.target.id, sid = d.source.id;
+          if (tid === "tam") return "#a78bfa";
+          if (WASTE.has(tid)) return sid.startsWith("kr") ? "#1b3360" : "#3d1616";
+          return COLORS[sid] || "#64748b";
+        })
+        .attr("stroke-opacity", d => {
+          const tid = d.target.id;
+          if (WASTE.has(tid)) return 0.15;
+          if (tid === "tam") return 0.65;
+          return 0.50;
+        });
+
+    // Link conversion rate labels
+    svg.append("g")
+      .selectAll("text")
+      .data(links.filter(d => LINK_LABELS[`${d.source.id}→${d.target.id}`]))
+      .join("text")
+        .attr("x", d => (d.source.x1 + d.target.x0) / 2)
+        .attr("y", d => {
+          const sy = (d.source.y0 + d.source.y1) / 2;
+          const ty = (d.target.y0 + d.target.y1) / 2;
+          return (sy + ty) / 2 - d.width / 2 - 6;
+        })
+        .attr("text-anchor", "middle")
+        .attr("dominant-baseline", "auto")
+        .attr("font-family", "-apple-system,'Apple SD Gothic Neo',sans-serif")
+        .attr("font-size", "11px")
+        .attr("font-weight", "700")
+        .attr("fill", d =>
+          d.target.id === "tam" ? "#c4b5fd"
+          : d.source.id.startsWith("kr") ? "#93c5fd"
+          : "#fca5a5"
+        )
+        .attr("opacity", 0.9)
+        .text(d => LINK_LABELS[`${d.source.id}→${d.target.id}`] || "");
+
+    // Nodes
+    svg.append("g")
+      .selectAll("rect")
+      .data(nodes)
+      .join("rect")
+        .attr("x", d => d.x0).attr("y", d => d.y0)
+        .attr("width", d => d.x1 - d.x0)
+        .attr("height", d => Math.max(1, d.y1 - d.y0))
+        .attr("fill", d => COLORS[d.id] || "#64748b")
+        .attr("rx", 3)
+        .attr("opacity", d => WASTE.has(d.id) ? 0.35 : 1)
+        .attr("filter", d => d.id === "tam" ? "url(#glow)" : null);
+
+    // Node labels
+    nodes.forEach(d => {
+      const lines = NAMES[d.id];
+      if (!lines) return;
+      const mid = (d.y0 + d.y1) / 2;
+      const isWaste = WASTE.has(d.id);
+      const isTam = d.id === "tam";
+      const isDepth0 = d.depth === 0;
+      const x = isDepth0 ? d.x0 - 10 : d.x1 + 10;
+      const anchor = isDepth0 ? "end" : "start";
+
+      lines.forEach((line, i) => {
+        svg.append("text")
+          .attr("x", x).attr("y", mid + (i === 0 ? -8 : 8))
+          .attr("text-anchor", anchor)
+          .attr("dominant-baseline", "middle")
+          .attr("font-family", "-apple-system,'Apple SD Gothic Neo','Noto Sans KR',sans-serif")
+          .attr("font-size", i === 0 ? "12px" : "11px")
+          .attr("font-weight", i === 0 ? (isTam ? "800" : "700") : "400")
+          .attr("fill", isWaste ? "#475569" : (isTam ? "#c4b5fd" : "#e2e8f0"))
+          .attr("opacity", isWaste ? 0.55 : 1)
+          .text(line);
+      });
+    });
+  })();
+  </script>
+</body>
+</html>
