@@ -91,12 +91,8 @@ def _build_windows(
         jaw_vals = [f.jaw_open for f in win_frames if f.jaw_open is not None]
         mar_mean = float(np.mean(mar_vals)) if mar_vals else 0.0
         jaw_mean = float(np.mean(jaw_vals)) if jaw_vals else 0.0
-        # Count jaw_open events only — primary signal, avoids double counting.
-        n_events = sum(
-            1
-            for e in events
-            if t_start <= e.t_sec < t_end and e.source_signal == "jaw_open"
-        )
+        # Count events from the primary signal only (caller pre-filters to primary_events).
+        n_events = sum(1 for e in events if t_start <= e.t_sec < t_end)
         if face_rate < 0.6:
             label, confidence = "bad_face", 0.3
         elif n_events >= 1:

@@ -10,7 +10,8 @@ the source image. Blendshape inputs expose ``.category_name`` and ``.score``.
 
 from __future__ import annotations
 
-from typing import Iterable, Sequence, Tuple
+import math
+from typing import Iterable, Optional, Sequence, Tuple
 
 import numpy as np
 
@@ -39,6 +40,44 @@ def compute_mar(landmarks, w: int, h: int) -> float:
     if horizontal <= 0:
         return 0.0
     return float(np.linalg.norm(p_up - p_dn) / horizontal)
+
+
+YAW_CLIP_DEG = 45.0
+
+
+def compute_mar_yaw_corrected(
+    landmarks,
+    w: int,
+    h: int,
+    transformation_matrix,
+    yaw_clip_deg: float = YAW_CLIP_DEG,
+) -> Optional[float]:
+    """MAR with cos(yaw) correction for camera-yaw-induced horizontal foreshortening.
+
+    For pure yaw about Y: observed_horizontal = true_horizontal * cos(yaw),
+    so corrected_MAR = vertical / true_horizontal = observed_MAR * cos(yaw).
+
+    Returns None when |yaw| > yaw_clip_deg — caller should fall back to jaw_open.
+    """
+    data = transformation_matrix.data
+    R = np.array(data, dtype=float).reshape(4, 4)
+    yaw_rad = math.atan2(R[0, 2], R[2, 2])
+    if abs(math.degrees(yaw_rad)) > yaw_clip_deg:
+        return None
+    cos_yaw = math.cos(yaw_rad)
+    if cos_yaw <= 0:
+        return None
+
+    p_up = np.array([landmarks[UPPER_LIP_IDX].x * w, landmarks[UPPER_LIP_IDX].y * h])
+    p_dn = np.array([landmarks[LOWER_LIP_IDX].x * w, landmarks[LOWER_LIP_IDX].y * h])
+    p_l = np.array([landmarks[LEFT_CORNER_IDX].x * w, landmarks[LEFT_CORNER_IDX].y * h])
+    p_r = np.array([landmarks[RIGHT_CORNER_IDX].x * w, landmarks[RIGHT_CORNER_IDX].y * h])
+    vertical = float(np.linalg.norm(p_up - p_dn))
+    observed_horizontal = float(np.linalg.norm(p_l - p_r))
+    true_horizontal = observed_horizontal / cos_yaw
+    if true_horizontal <= 0:
+        return 0.0
+    return vertical / true_horizontal
 
 
 def compute_jaw_open(blendshapes: Iterable) -> float:
