@@ -20,10 +20,29 @@ export default function ImuChart({ imu, windows, currentIdx, onWindowClick }: Pr
 
   useEffect(() => { windowsRef.current = windows }, [windows])
 
-  // Highlight update only — no chart recreation
+  // Highlight update + auto-pan — no chart recreation
   useEffect(() => {
     idxRef.current = currentIdx
-    if (canvasRef.current?.isConnected) chartRef.current?.update('none')
+    const chart = chartRef.current
+    if (!chart || !canvasRef.current?.isConnected) return
+
+    const win = windowsRef.current[currentIdx]
+    if (win) {
+      const xScale = (chart as any).scales?.['x']
+      if (xScale) {
+        const { min, max } = xScale
+        if (win.t_start < min || win.t_end > max) {
+          const rangeWidth = max - min
+          const center = (win.t_start + win.t_end) / 2
+          ;(chart as any).zoomScale('x', {
+            min: center - rangeWidth / 2,
+            max: center + rangeWidth / 2,
+          }, 'none')
+        }
+      }
+    }
+
+    chart.update('none')
   }, [currentIdx])
 
   // Create chart only when imu data changes
@@ -114,9 +133,18 @@ export default function ImuChart({ imu, windows, currentIdx, onWindowClick }: Pr
 
     const el = canvasRef.current
     const reset = () => chartRef.current?.resetZoom()
+    const handleWheel = (e: WheelEvent) => {
+      if (!chartRef.current) return
+      if (Math.abs(e.deltaX) > Math.abs(e.deltaY)) {
+        e.preventDefault()
+        ;(chartRef.current as any).pan({ x: -e.deltaX }, undefined, 'default')
+      }
+    }
     el.addEventListener('dblclick', reset)
+    el.addEventListener('wheel', handleWheel, { passive: false })
     return () => {
       el.removeEventListener('dblclick', reset)
+      el.removeEventListener('wheel', handleWheel)
       chartRef.current?.destroy()
       chartRef.current = null
     }

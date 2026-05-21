@@ -118,6 +118,84 @@ def _build_windows(
     return windows
 
 
+def _chin_jaw_crossval(
+    windows: List[WindowLabel],
+    events: List[ChewEvent],
+    primary_label: str,
+    lookahead: int = 2,
+) -> List[WindowLabel]:
+    """Two-pass FP reduction for chin_y fallback.
+
+    Windows whose chewing evidence comes from the primary signal → "anchored".
+    Windows with only chin_y events → "tentative"; promoted to chewing only when
+    an anchored window exists within ±lookahead positions.
+    bad_face windows are non-chewing and do NOT count as anchors.
+    Tentative windows cannot validate each other (chain-prevention).
+    """
+    if not windows:
+        return windows
+
+    statuses = []
+    for w in windows:
+        if w.label != "chewing":
+            statuses.append("non_chewing")
+            continue
+        has_primary = any(
+            w.t_start <= e.t_sec < w.t_end and e.source_signal == primary_label
+            for e in events
+        )
+        statuses.append("anchored" if has_primary else "tentative")
+
+    result = []
+    for i, (w, status) in enumerate(zip(windows, statuses)):
+        if status != "tentative":
+            result.append(w)
+            continue
+        lo = max(0, i - lookahead)
+        hi = min(len(statuses) - 1, i + lookahead)
+        has_anchor = any(statuses[j] == "anchored" for j in range(lo, hi + 1) if j != i)
+        if has_anchor:
+            result.append(w)
+        else:
+            result.append(WindowLabel(
+                t_start=w.t_start, t_end=w.t_end, label="rest",
+                mar_mean=w.mar_mean, jaw_open_mean=w.jaw_open_mean,
+                confidence=w.confidence, quality=w.quality, n_events=w.n_events,
+            ))
+    return result
+
+
+def _smooth_labels(windows: List[WindowLabel]) -> List[WindowLabel]:
+    """Temporal smoothing: flip isolated labels to match both neighbors.
+
+    An isolated "rest" surrounded by "chewing" on both sides is likely a FN;
+    an isolated "chewing" surrounded by "rest" is likely a FP.
+    bad_face windows act as boundaries — smoothing does not cross them.
+    """
+    if len(windows) < 3:
+        return windows
+    labels = [w.label for w in windows]
+    smoothed = list(labels)
+    for i in range(1, len(labels) - 1):
+        prev, curr, nxt = labels[i - 1], labels[i], labels[i + 1]
+        if curr == "bad_face":
+            continue
+        if prev in ("chewing", "rest") and nxt in ("chewing", "rest") and prev == nxt and curr != prev:
+            smoothed[i] = prev
+
+    result = []
+    for w, new_label in zip(windows, smoothed):
+        if new_label == w.label:
+            result.append(w)
+        else:
+            result.append(WindowLabel(
+                t_start=w.t_start, t_end=w.t_end, label=new_label,
+                mar_mean=w.mar_mean, jaw_open_mean=w.jaw_open_mean,
+                confidence=w.confidence, quality=w.quality, n_events=w.n_events,
+            ))
+    return result
+
+
 class OursEngine(EngineBase):
     """In-house chewing detector built on MediaPipe Face Landmarker.
 
@@ -125,21 +203,31 @@ class OursEngine(EngineBase):
       "jaw_open"  — original behaviour (jaw_open primary, mar stored only)
       "mar"       — MAR primary
       "composite" — weighted sum: mar_weight*MAR + (1-mar_weight)*jaw_open
+
+    use_chin_fallback: also detect peaks in chin-to-nose displacement (chin_y)
+      and merge them with primary events. Catches closed-mouth chewing where
+      jaw_open/MAR stay near zero but chin still oscillates.
     """
 
     def __init__(
         self,
         signal_mode: str = "jaw_open",
         mar_weight: float = 0.7,
+        use_chin_fallback: bool = False,
+        use_temporal_smooth: bool = False,
     ) -> None:
         assert signal_mode in ("jaw_open", "mar", "composite"), f"Unknown signal_mode: {signal_mode}"
         self.signal_mode = signal_mode
         self.mar_weight = mar_weight
+        self.use_chin_fallback = use_chin_fallback
+        self.use_temporal_smooth = use_temporal_smooth
 
     @property
     def engine_name(self) -> str:
         suffix = "" if self.signal_mode == "jaw_open" else f"_{self.signal_mode}"
-        return f"ours{suffix}"
+        chin_suffix = "_chin" if self.use_chin_fallback else ""
+        smooth_suffix = "_smooth" if self.use_temporal_smooth else ""
+        return f"ours{suffix}{chin_suffix}{smooth_suffix}"
 
     def analyze(
         self,
@@ -279,6 +367,18 @@ class OursEngine(EngineBase):
         jaw_peaks = find_chew_peaks(jaw_smoothed, fps) if primary_label != "jaw_open" else primary_peaks
         mar_peaks = find_chew_peaks(mar_smoothed, fps) if primary_label != "mar" else primary_peaks
 
+        # chin_y fallback: detect peaks in chin-nose relative displacement with
+        # lower prominence threshold (0.3 vs 0.5) since closed-mouth amplitude is smaller.
+        chin_y_array = np.array(
+            [f.chin_y if f.chin_y is not None else np.nan for f in frames]
+        )
+        chin_smoothed = apply_smoothing(_interp_nan(chin_y_array), "default", fps=fps)
+        chin_peaks = (
+            find_chew_peaks(chin_smoothed, fps, prominence_std=0.3)
+            if self.use_chin_fallback
+            else np.array([], dtype=int)
+        )
+
         events: List[ChewEvent] = []
         for i in primary_peaks:
             events.append(
@@ -306,10 +406,25 @@ class OursEngine(EngineBase):
                     source_signal="mar",
                     frame_index=int(frames[i].frame_index),
                 ))
+        for i in chin_peaks:
+            events.append(ChewEvent(
+                t_sec=float(frames[i].t_sec),
+                signal_value=float(chin_smoothed[i]),
+                source_signal="chin_y",
+                frame_index=int(frames[i].frame_index),
+            ))
         events.sort(key=lambda e: e.t_sec)
 
-        primary_events = [e for e in events if e.source_signal == primary_label]
+        # chin_y events are counted alongside primary when fallback is active
+        primary_sources = {primary_label}
+        if self.use_chin_fallback:
+            primary_sources.add("chin_y")
+        primary_events = [e for e in events if e.source_signal in primary_sources]
         windows = _build_windows(frames, primary_events)
+        if self.use_chin_fallback:
+            windows = _chin_jaw_crossval(windows, primary_events, primary_label)
+        if self.use_temporal_smooth:
+            windows = _smooth_labels(windows)
         bouts = segment_bouts(primary_events)
         n_chews = int(len(primary_peaks))
 

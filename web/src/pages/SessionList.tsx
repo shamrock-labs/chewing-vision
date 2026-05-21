@@ -151,9 +151,9 @@ export default function SessionList() {
                         <button
                           className="px-4 py-2 rounded-lg text-sm font-medium shrink-0"
                           style={{ background: 'var(--blue)', color: '#fff' }}
-                          onClick={() => nav(`/annotate/${s.id}?mode=disagree`)}
+                          onClick={() => nav(`/annotate/${s.id}?mode=review`)}
                         >
-                          라벨링 →
+                          리뷰 라벨링 →
                         </button>
                       )}
                       <button
@@ -175,7 +175,7 @@ export default function SessionList() {
         <div className="mt-8 rounded-xl p-4 border text-xs space-y-1" style={{ background: 'var(--surface)', borderColor: 'var(--border)', color: 'var(--muted)' }}>
           <p className="font-medium mb-2" style={{ color: 'var(--text)' }}>파이프라인 흐름</p>
           <p><span style={{ color: '#f87171' }}>●</span> Vision 필요 → <code style={{ color: 'var(--blue)' }}>python ml/import_to_db.py</code> 실행</p>
-          <p><span style={{ color: '#f59e0b' }}>●</span> 라벨 필요 → 라벨링 버튼으로 불일치 윈도우 검토</p>
+          <p><span style={{ color: '#f59e0b' }}>●</span> 라벨 필요 → 리뷰 라벨링 버튼으로 vision/IMU 불일치 후보 검토</p>
           <p><span style={{ color: '#22c55e' }}>●</span> LOSO 준비 → <code style={{ color: 'var(--blue)' }}>.venv/bin/python ml/save_loso_results.py --notes "메모"</code></p>
         </div>
       </main>

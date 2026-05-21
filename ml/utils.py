@@ -77,17 +77,19 @@ def make_windows(imu: pd.DataFrame, labels: pd.DataFrame,
 def make_windows_with_times(imu: pd.DataFrame, labels: pd.DataFrame,
                              window_sec: float = 2.0, stride_sec: float = 0.5,
                              boundary_sec: float = 1.0,
-                             ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+                             return_raw: bool = False,
+                             ) -> tuple:
     """슬라이딩 윈도우로 feature matrix X, label vector y, t_start 배열 생성.
 
     boundary_sec: 레이블 전환점 앞뒤로 이 범위 안에 걸치는 윈도우는 학습에서 제외.
     경계 오염(boundary contamination)을 막아 clean 샘플만 남긴다.
+    return_raw=True 이면 (raw_windows, y, t_starts) — augmentation용.
     """
     t_min = imu["t_vision"].min()
     t_max = imu["t_vision"].max() - window_sec
     transitions = _transition_times(labels)
 
-    X, y, t_starts = [], [], []
+    X, raw_windows, y, t_starts = [], [], [], []
     t = t_min
     while t <= t_max:
         window = imu[(imu["t_vision"] >= t) & (imu["t_vision"] < t + window_sec)]
@@ -104,13 +106,17 @@ def make_windows_with_times(imu: pd.DataFrame, labels: pd.DataFrame,
                 t += stride_sec
                 continue
 
-        features = extract_features(window)
         label = assign_label(t, t + window_sec, labels)
-        X.append(features)
+        if return_raw:
+            raw_windows.append(window.copy())
+        else:
+            X.append(extract_features(window))
         y.append(label)
         t_starts.append(t)
         t += stride_sec
 
+    if return_raw:
+        return raw_windows, np.array(y), np.array(t_starts)
     return np.array(X), np.array(y), np.array(t_starts)
 
 
@@ -137,3 +143,51 @@ FEATURE_NAMES = (
     [f"{axis}_{stat}" for axis in IMU_AXES for stat in ("rms", "std")]
     + [f"{axis}_delta_rms" for axis in ATTITUDE_AXES]
 )
+
+
+_AUG_RNG = np.random.default_rng(42)
+
+
+def _random_so3(angle_max_deg: float = 15.0, rng=None) -> np.ndarray:
+    """Rodrigues formula로 무작위 SO(3) 회전행렬 생성."""
+    if rng is None:
+        rng = _AUG_RNG
+    axis = rng.standard_normal(3)
+    axis /= np.linalg.norm(axis)
+    angle = rng.uniform(0, np.radians(angle_max_deg))
+    K = np.array([
+        [0,        -axis[2],  axis[1]],
+        [axis[2],   0,       -axis[0]],
+        [-axis[1],  axis[0],  0     ],
+    ])
+    return np.eye(3) + np.sin(angle) * K + (1 - np.cos(angle)) * (K @ K)
+
+
+def _apply_so3_rotation(window_df: pd.DataFrame, R: np.ndarray) -> pd.DataFrame:
+    """gyro·accel 축에 R 적용. attitude 축은 절대 방향이므로 제외."""
+    rotated = window_df.copy()
+    gyro = window_df[["rotation_x", "rotation_y", "rotation_z"]].values
+    accel = window_df[["user_accel_x", "user_accel_y", "user_accel_z"]].values
+    rotated[["rotation_x", "rotation_y", "rotation_z"]] = gyro @ R.T
+    rotated[["user_accel_x", "user_accel_y", "user_accel_z"]] = accel @ R.T
+    return rotated
+
+
+def augment_windows(raw_windows: list, y: np.ndarray,
+                    n_aug: int = 3, angle_max_deg: float = 15.0,
+                    rng=None) -> tuple[np.ndarray, np.ndarray]:
+    """각 (window, label) 쌍에 대해 n_aug개의 회전 복사본 생성.
+
+    새 R은 복사본마다 독립적으로 샘플링.
+    원본 윈도우는 포함하지 않음 — 호출 측에서 합산.
+    """
+    if rng is None:
+        rng = _AUG_RNG
+    X_aug, y_aug = [], []
+    for window, label in zip(raw_windows, y):
+        for _ in range(n_aug):
+            R = _random_so3(angle_max_deg, rng)
+            rotated = _apply_so3_rotation(window, R)
+            X_aug.append(extract_features(rotated))
+            y_aug.append(label)
+    return np.array(X_aug), np.array(y_aug)

@@ -19,7 +19,7 @@ from pathlib import Path
 MAIN_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(MAIN_ROOT))
 
-from ml.utils import load_labels, load_session, make_windows_with_times
+from ml.utils import augment_windows, extract_features, load_labels, load_session, make_windows_with_times
 import numpy as np
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.metrics import classification_report
@@ -27,14 +27,14 @@ from sklearn.metrics import classification_report
 SESSIONS_DIR = MAIN_ROOT / "sessions"
 
 
-def _discover_sessions():
+def _discover_sessions(labels_suffix: str = ""):
     sessions = []
     for sdir in sorted(SESSIONS_DIR.iterdir()):
         if not sdir.is_dir():
             continue
         imu_files     = sorted(sdir.glob("imu_*.csv"))
         session_files = sorted(sdir.glob("session_*.json"))
-        labels_path   = sdir / "labels_ours.csv"
+        labels_path   = sdir / f"labels_ours{labels_suffix}.csv"
         if imu_files and session_files and labels_path.exists():
             sessions.append({
                 "id":           sdir.name,
@@ -159,12 +159,15 @@ def _gt_from_overlap(t_loso, win_map, window_sec=LOSO_WINDOW_SEC):
     return None
 
 
-def run_loso(sessions):
+def run_loso(sessions, use_augment: bool = False, n_aug: int = 3, angle_max_deg: float = 15.0):
     cache = {}
     for s in sessions:
         imu, _ = load_session(s["imu_path"], s["session_path"])
         labels  = load_labels(s["labels_path"])
-        X, y, t_starts = make_windows_with_times(imu, labels)
+
+        return_raw = use_augment
+        result = make_windows_with_times(imu, labels, return_raw=return_raw)
+        raw_windows_or_X, y, t_starts = result
 
         win_map = fetch_windows_from_db(s["id"])
         window_ids = [None] * len(t_starts)
@@ -202,7 +205,16 @@ def run_loso(sessions):
         else:
             msg = "no DB windows"
         print(f"    [{s['id']}] {msg}")
-        cache[s["id"]] = {"X": X, "y": y, "t_starts": t_starts, "window_ids": window_ids}
+
+        if use_augment:
+            X = np.array([extract_features(w) for w in raw_windows_or_X])
+        else:
+            X = raw_windows_or_X
+
+        cache[s["id"]] = {
+            "X": X, "y": y, "t_starts": t_starts, "window_ids": window_ids,
+            "raw": raw_windows_or_X if use_augment else None,
+        }
 
     fold_results = []
     all_y_true, all_y_pred = [], []
@@ -216,12 +228,32 @@ def run_loso(sessions):
 
         if len(X_test) == 0:
             continue
-        X_train = np.vstack([v["X"] for k, v in cache.items() if k != test_id and len(v["X"]) > 0])
-        y_train = np.concatenate([v["y"] for k, v in cache.items() if k != test_id and len(v["y"]) > 0])
+
+        train_entries = [v for k, v in cache.items() if k != test_id and len(v["X"]) > 0]
+        if not train_entries:
+            continue
+
+        X_train = np.vstack([v["X"] for v in train_entries])
+        y_train = np.concatenate([v["y"] for v in train_entries])
+
+        if use_augment:
+            rng = np.random.default_rng(42)
+            aug_X_parts, aug_y_parts = [], []
+            for v in train_entries:
+                ax, ay = augment_windows(v["raw"], v["y"], n_aug=n_aug,
+                                         angle_max_deg=angle_max_deg, rng=rng)
+                aug_X_parts.append(ax)
+                aug_y_parts.append(ay)
+            X_aug = np.vstack(aug_X_parts)
+            y_aug = np.concatenate(aug_y_parts)
+            X_train = np.vstack([X_train, X_aug])
+            y_train = np.concatenate([y_train, y_aug])
+
         if len(X_train) == 0:
             continue
 
-        clf = RandomForestClassifier(n_estimators=100, random_state=42, n_jobs=-1)
+        clf = RandomForestClassifier(n_estimators=100, random_state=42, n_jobs=-1,
+                                     class_weight="balanced")
         clf.fit(X_train, y_train)
         y_pred = clf.predict(X_test)
 
@@ -329,17 +361,21 @@ def _trigger_coreml_export(run_id: int, notes: str) -> None:
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--notes", default="", help="Optional run description")
+    ap.add_argument("--labels-suffix", default="", help="e.g. '_chin' → use labels_ours_chin.csv")
     ap.add_argument("--export-coreml", action="store_true",
                     help="Train on full dataset and export .mlmodel via cml_env after LOSO")
+    ap.add_argument("--augment", action="store_true",
+                    help="SO(3) rotation augmentation on train set (n_aug=3, angle_max=15°)")
     args = ap.parse_args()
 
-    sessions = _discover_sessions()
+    sessions = _discover_sessions(labels_suffix=args.labels_suffix)
     if len(sessions) < 2:
         print(f"[save_loso_results] Need at least 2 sessions, found {len(sessions)}")
         return
 
-    print(f"[save_loso_results] {len(sessions)} sessions -> LOSO CV")
-    fold_results, pooled, predictions = run_loso(sessions)
+    print(f"[save_loso_results] {len(sessions)} sessions -> LOSO CV"
+          + (" [augment ON]" if args.augment else ""))
+    fold_results, pooled, predictions = run_loso(sessions, use_augment=args.augment)
     print(f"\n  Pooled acc={pooled['accuracy']:.3f} "
           f"F1-chew={pooled['chewing']['f1-score']:.3f} "
           f"F1-rest={pooled['rest']['f1-score']:.3f}")

@@ -65,6 +65,34 @@ export async function fetchLatestImuPreds(sessionId: string): Promise<Record<num
   return map
 }
 
+export async function fetchLatestImuPredsByWindow(sessionId: string): Promise<Record<number, number>> {
+  const { data: runs, error: e1 } = await insforge.database
+    .from('loso_runs').select('id').order('run_at', { ascending: false }).limit(1)
+  if (e1 || !runs?.length) return {}
+  const runId = runs[0].id
+  const { data, error: e2 } = await insforge.database
+    .from('loso_predictions')
+    .select('window_id, y_pred')
+    .eq('run_id', runId)
+    .eq('session_id', sessionId)
+    .not('window_id', 'is', null)
+  if (e2 || !data) return {}
+
+  const votes: Record<number, { rest: number; chewing: number }> = {}
+  for (const p of data) {
+    if (p.window_id == null) continue
+    votes[p.window_id] ??= { rest: 0, chewing: 0 }
+    if (p.y_pred === 1) votes[p.window_id].chewing++
+    else votes[p.window_id].rest++
+  }
+
+  const map: Record<number, number> = {}
+  for (const [windowId, counts] of Object.entries(votes)) {
+    map[Number(windowId)] = counts.chewing >= counts.rest ? 1 : 0
+  }
+  return map
+}
+
 export function matchImuPred(preds: Record<number, number>, tStart: number): number | null {
   // Try exact and ±0.5s range (LOSO t_start has ~0.334s offset from DB t_start)
   for (let delta = 0; delta <= 6; delta++) {

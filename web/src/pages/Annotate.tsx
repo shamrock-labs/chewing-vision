@@ -1,10 +1,12 @@
 import { useEffect, useRef, useState, useCallback } from 'react'
 import { useParams, useSearchParams, useNavigate } from 'react-router-dom'
-import { fetchWindows, saveLabel, batchSaveLabels, videoUrl, signalsUrl, imuUrl, fetchLatestImuPreds, matchImuPred } from '../lib/insforge'
+import { fetchWindows, saveLabel, videoUrl, signalsUrl, imuUrl, fetchLatestImuPreds, fetchLatestImuPredsByWindow, matchImuPred } from '../lib/insforge'
 import SignalChart from '../components/SignalChart'
 import ImuChart from '../components/ImuChart'
 import ProgressStrip from '../components/ProgressStrip'
 import type { WindowRow, SignalPoint, ImuPoint, HumanLabel } from '../types'
+
+type AnnotateMode = 'review' | 'disagree' | 'all'
 
 function parseSignalCsv(text: string): SignalPoint[] {
   const lines = text.trim().split('\n')
@@ -55,16 +57,42 @@ function labelColor(label: string | null) {
   return 'var(--muted)'
 }
 
+function getImuPred(w: WindowRow, imuPreds: Record<number, number>, imuPredsByWindow: Record<number, number>): number | null {
+  if (Object.keys(imuPredsByWindow).length > 0) {
+    return imuPredsByWindow[w.id] ?? null
+  }
+  return matchImuPred(imuPreds, w.t_start)
+}
+
+function isReviewCandidate(w: WindowRow, imuPreds: Record<number, number>, imuPredsByWindow: Record<number, number>): boolean {
+  if (w.human_label || (w.jaw_open_label !== 'chewing' && w.jaw_open_label !== 'rest')) return false
+  const pred = getImuPred(w, imuPreds, imuPredsByWindow)
+  if (pred === null) return false
+  return (w.jaw_open_label === 'chewing' && pred === 0) || (w.jaw_open_label === 'rest' && pred === 1)
+}
+
+function filterWindows(
+  rows: WindowRow[],
+  mode: AnnotateMode,
+  imuPreds: Record<number, number>,
+  imuPredsByWindow: Record<number, number>,
+): WindowRow[] {
+  if (mode === 'review') return rows.filter(w => isReviewCandidate(w, imuPreds, imuPredsByWindow))
+  if (mode === 'disagree') return rows.filter(w => w.jaw_open_label !== w.composite_label)
+  return rows
+}
+
 export default function Annotate() {
   const { sessionId } = useParams<{ sessionId: string }>()
   const [searchParams] = useSearchParams()
   const nav = useNavigate()
-  const mode = (searchParams.get('mode') ?? 'disagree') as 'disagree' | 'all'
+  const mode = (searchParams.get('mode') ?? 'review') as AnnotateMode
 
   const [windows, setWindows] = useState<WindowRow[]>([])
   const [signals, setSignals] = useState<SignalPoint[]>([])
   const [imu, setImu] = useState<ImuPoint[]>([])
   const [imuPreds, setImuPreds] = useState<Record<number, number>>({})
+  const [imuPredsByWindow, setImuPredsByWindow] = useState<Record<number, number>>({})
   const [idx, setIdx] = useState(0)
   const [saving, setSaving] = useState(false)
   const [status, setStatus] = useState('')
@@ -79,31 +107,14 @@ export default function Annotate() {
     if (!sessionId) return
     const windowParam = searchParams.get('window')
     const tParam = searchParams.get('t')
-    fetchWindows(sessionId).then(rows => {
-      // auto-fill human_label for windows where both models agree
-      const toFill = rows.filter(w =>
-        !w.human_label &&
-        w.jaw_open_label === w.composite_label &&
-        (w.jaw_open_label === 'chewing' || w.jaw_open_label === 'rest')
-      )
-      let updatedRows = rows
-      if (toFill.length > 0) {
-        const chewIds = toFill.filter(w => w.jaw_open_label === 'chewing').map(w => w.id)
-        const restIds = toFill.filter(w => w.jaw_open_label === 'rest').map(w => w.id)
-        const updates: Array<{ ids: number[]; label: HumanLabel }> = [
-          ...(chewIds.length ? [{ ids: chewIds, label: 'chewing' as HumanLabel }] : []),
-          ...(restIds.length ? [{ ids: restIds, label: 'rest' as HumanLabel }] : []),
-        ]
-        batchSaveLabels(updates).catch(console.error)
-        const fillSet = new Set(toFill.map(w => w.id))
-        updatedRows = rows.map(w =>
-          fillSet.has(w.id) ? { ...w, human_label: w.jaw_open_label as HumanLabel } : w
-        )
-      }
-
-      const filtered = mode === 'disagree'
-        ? updatedRows.filter(w => w.jaw_open_label !== w.composite_label)
-        : updatedRows
+    Promise.all([
+      fetchWindows(sessionId),
+      fetchLatestImuPreds(sessionId).catch(() => ({} as Record<number, number>)),
+      fetchLatestImuPredsByWindow(sessionId).catch(() => ({} as Record<number, number>)),
+    ]).then(([rows, preds, predsByWindow]) => {
+      setImuPreds(preds)
+      setImuPredsByWindow(predsByWindow)
+      const filtered = filterWindows(rows, mode, preds, predsByWindow)
       setWindows(filtered)
       if (filtered.length === 0) {
         setIdx(0)
@@ -131,7 +142,6 @@ export default function Annotate() {
       .then(r => r.text())
       .then(text => setImu(parseImuCsv(text)))
       .catch(() => setImu([]))
-    fetchLatestImuPreds(sessionId).then(setImuPreds).catch(() => {})
   }, [sessionId, mode])
 
   // Seek video when window changes (skip if idx was driven by video playback)
@@ -214,7 +224,7 @@ export default function Annotate() {
           {status && <span className="ml-3" style={{ color: 'var(--chewing)' }}>{status}</span>}
         </span>
         <div className="flex gap-1 ml-2">
-          {(['disagree', 'all'] as const).map(m => (
+          {(['review', 'disagree', 'all'] as const).map(m => (
             <button key={m}
               className="px-2 py-1 rounded text-xs"
               style={{ background: mode === m ? 'var(--blue)' : 'var(--surface2)', color: mode === m ? '#fff' : 'var(--muted)' }}
@@ -258,7 +268,9 @@ export default function Annotate() {
             )}
             {!win && (
               <div className="text-sm text-center px-6" style={{ color: 'var(--muted)' }}>
-                {mode === 'disagree'
+                {mode === 'review'
+                  ? '이 세션에는 아직 확인할 vision/IMU 불일치 후보가 없습니다.'
+                  : mode === 'disagree'
                   ? '이 세션에는 jaw_open과 composite가 불일치한 윈도우가 없습니다.'
                   : '표시할 윈도우가 없습니다.'}
               </div>
@@ -368,9 +380,9 @@ export default function Annotate() {
                   <span style={{ color: 'var(--chewing)' }}>composite</span>: {win.composite_label ?? '—'}
                 </p>
                 {win && (() => {
-                  const pred = matchImuPred(imuPreds, win.t_start)
+                  const pred = getImuPred(win, imuPreds, imuPredsByWindow)
                   if (pred === null) {
-                    return Object.keys(imuPreds).length > 0
+                    return Object.keys(imuPreds).length > 0 || Object.keys(imuPredsByWindow).length > 0
                       ? <p className="text-xs" style={{ color: 'var(--border)' }}>IMU(RF): 예측 없음</p>
                       : null
                   }
@@ -403,6 +415,9 @@ export default function Annotate() {
               </p>
               <p className="text-xs" style={{ color: 'var(--muted)' }}>
                 · <b style={{ color: 'var(--text)' }}>disagree</b> 모드: 두 모델 의견 불일치 윈도우만 표시
+              </p>
+              <p className="text-xs" style={{ color: 'var(--muted)' }}>
+                · <b style={{ color: 'var(--text)' }}>review</b> 모드: vision 라벨과 IMU 예측이 반대인 미라벨 윈도우만 표시
               </p>
             </div>
             <p className="text-xs" style={{ color: 'var(--border)' }}>
