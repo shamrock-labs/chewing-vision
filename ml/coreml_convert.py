@@ -26,14 +26,14 @@ SESSIONS_DIR = MAIN_ROOT / "sessions"
 MODELS_DIR   = MAIN_ROOT / "ml" / "models"
 
 
-def _discover_sessions() -> list[dict]:
+def _discover_sessions(labels_suffix: str = "") -> list[dict]:
     sessions = []
     for sdir in sorted(SESSIONS_DIR.iterdir()):
         if not sdir.is_dir():
             continue
         imu_files     = sorted(sdir.glob("imu_*.csv"))
         session_files = sorted(sdir.glob("session_*.json"))
-        labels_path   = sdir / "labels_ours.csv"
+        labels_path   = sdir / f"labels_ours{labels_suffix}.csv"
         if imu_files and session_files and labels_path.exists():
             sessions.append({
                 "id":           sdir.name,
@@ -73,12 +73,14 @@ def build_full_dataset(sessions: list[dict]):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--notes", default="", help="Optional description for metadata")
+    ap.add_argument("--labels-suffix", default="_chin",
+                    help="Label file suffix (default: _chin → labels_ours_chin.csv)")
     args = ap.parse_args()
 
     import coremltools as ct
     print(f"coremltools: {ct.__version__}")
 
-    sessions = _discover_sessions()
+    sessions = _discover_sessions(labels_suffix=args.labels_suffix)
     if not sessions:
         print("No sessions found.")
         sys.exit(1)
@@ -88,7 +90,8 @@ def main():
     print(f"Total: {len(X)} windows, chew={y.sum()}, rest={(y==0).sum()}")
 
     print("Training RandomForest on full dataset...")
-    clf = RandomForestClassifier(n_estimators=200, random_state=42, n_jobs=-1)
+    clf = RandomForestClassifier(n_estimators=200, random_state=42, n_jobs=-1,
+                                 class_weight="balanced")
     clf.fit(X, y)
 
     y_pred_train = clf.predict(X)
